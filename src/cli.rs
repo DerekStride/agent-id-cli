@@ -1,0 +1,89 @@
+use clap::{Args, Command, CommandFactory, Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "agent-id",
+    version,
+    about = "Portable identity registry for coding-agent sessions",
+    long_about = "agent-id assigns permanent human-readable names to stable agent-harness session IDs."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    /// Register a new permanent identity for a session
+    Register(RegisterArgs),
+    /// Look up the identity already registered for a session
+    Lookup(LookupArgs),
+    /// Output the agent-facing identity workflow manual
+    Prime(PrimeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RegisterArgs {
+    /// Harness session ID; falls back to AGENT_SESSION_ID or OMP_SESSION_ID
+    #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
+    pub session: Option<String>,
+
+    /// Explicit harness session ID
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// Prefer this family name when allocating the identity
+    #[arg(long, value_name = "NAME")]
+    pub family: Option<String>,
+
+    /// Computer realm; falls back to AGENT_REALM or config
+    #[arg(long, value_name = "NAME")]
+    pub realm: Option<String>,
+
+    /// Print the complete assignment as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl RegisterArgs {
+    pub fn explicit_session(&self) -> Option<&str> {
+        self.session.as_deref().or(self.session_id.as_deref())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct LookupArgs {
+    /// Harness session ID; falls back to AGENT_SESSION_ID or OMP_SESSION_ID
+    #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
+    pub session: Option<String>,
+
+    /// Explicit harness session ID
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// Print the complete assignment as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl LookupArgs {
+    pub fn explicit_session(&self) -> Option<&str> {
+        self.session.as_deref().or(self.session_id.as_deref())
+    }
+}
+
+#[derive(Debug, Args)]
+#[command(about = "Output the agent-facing identity workflow manual")]
+pub struct PrimeArgs {
+    /// Output only the workflow prelude
+    #[arg(long)]
+    pub prelude: bool,
+
+    /// Wrap the documentation in a JSON object
+    #[arg(long)]
+    pub json: bool,
+}
+
+pub fn build_cli() -> Command {
+    Cli::command()
+}
