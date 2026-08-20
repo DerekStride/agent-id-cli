@@ -12,15 +12,10 @@ type ToolResult = {
   isError?: boolean;
 };
 
-type ToolCallEvent = {
-  toolName: string;
-  input: Record<string, unknown>;
-};
-
 type ExtensionAPI = {
   on(
-    event: "session_start" | "session_switch" | "agent_start" | "tool_call",
-    handler: (event: unknown, context: SessionContext) => unknown,
+    event: "session_start" | "session_switch" | "agent_start",
+    handler: (event: unknown, context: SessionContext) => void,
   ): void;
   registerTool(tool: {
     name: string;
@@ -65,8 +60,6 @@ const IDENTITY_ENV_KEYS = [
   "AGENT_ID_FAMILY_NAME",
   "AGENT_ID_REALM",
 ] as const;
-
-let currentAssignment: Assignment | undefined;
 
 function requiredString(value: Record<string, unknown>, key: string): string {
   const result = value[key];
@@ -130,45 +123,17 @@ function ensureIdentity(sessionId: string): IdentityResult {
   }
 }
 
-function identityEnvironment(assignment: Assignment): Record<string, string> {
-  return {
-    AGENT_ID_SESSION_ID: assignment.session_id,
-    AGENT_ID_NAME: assignment.name,
-    AGENT_ID_SLUG: assignment.slug,
-    AGENT_ID_FIRST_NAME: assignment.first_name,
-    AGENT_ID_FAMILY_NAME: assignment.family_name,
-    AGENT_ID_REALM: assignment.realm,
-  };
-}
-
 function clearIdentityEnvironment(): void {
   for (const key of IDENTITY_ENV_KEYS) delete process.env[key];
-  currentAssignment = undefined;
 }
 
 function exportIdentity(assignment: Assignment): void {
-  currentAssignment = assignment;
-  Object.assign(process.env, identityEnvironment(assignment));
-}
-
-function injectIdentityEnvironment(
-  event: unknown,
-): { input: Record<string, unknown> } | undefined {
-  if (!currentAssignment || typeof event !== "object" || event === null) return;
-  const toolEvent = event as Partial<ToolCallEvent>;
-  if (toolEvent.toolName !== "bash" || !toolEvent.input) return;
-
-  const existingEnv = toolEvent.input.env;
-  const callerEnv =
-    typeof existingEnv === "object" && existingEnv !== null && !Array.isArray(existingEnv)
-      ? (existingEnv as Record<string, unknown>)
-      : {};
-  return {
-    input: {
-      ...toolEvent.input,
-      env: { ...identityEnvironment(currentAssignment), ...callerEnv },
-    },
-  };
+  process.env.AGENT_ID_SESSION_ID = assignment.session_id;
+  process.env.AGENT_ID_NAME = assignment.name;
+  process.env.AGENT_ID_SLUG = assignment.slug;
+  process.env.AGENT_ID_FIRST_NAME = assignment.first_name;
+  process.env.AGENT_ID_FAMILY_NAME = assignment.family_name;
+  process.env.AGENT_ID_REALM = assignment.realm;
 }
 
 function reportSession(context: SessionContext): void {
@@ -189,7 +154,6 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, context) => reportSession(context));
   pi.on("session_switch", (_event, context) => reportSession(context));
   pi.on("agent_start", (_event, context) => reportSession(context));
-  pi.on("tool_call", injectIdentityEnvironment);
 
   pi.registerTool({
     name: "agent_identity",
