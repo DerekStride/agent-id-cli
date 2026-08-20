@@ -146,3 +146,27 @@ fn prime_json_contains_the_command_contract() {
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
 }
+
+#[test]
+fn registration_auto_creates_realm_when_missing() {
+    let root = TempDir::new().unwrap();
+    let config_dir = TempDir::new().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-id"));
+    command
+        .env("AGENT_ID_HOME", root.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env_remove("AGENT_REALM")
+        .env_remove("AGENT_ID_SESSION_ID");
+
+    let output = command
+        .args(["register", "session-auto-realm", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let assignment: Assignment = serde_json::from_slice(&output.stdout).unwrap();
+    let realm_file = config_dir.path().join("agent-id/realm");
+    assert!(realm_file.is_file());
+    let persisted_realm = std::fs::read_to_string(&realm_file).unwrap();
+    assert_eq!(persisted_realm.trim(), assignment.realm);
+}

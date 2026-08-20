@@ -30,6 +30,8 @@ The registry defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent
 
 Session records are stored as `by-session/<session-id>.json`; session IDs must be filename-safe.
 
+Registration resolves the realm from `--realm`, `AGENT_REALM` (for tests/overrides), or `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as the fallback. If missing, a realm is automatically chosen and saved to the realm file for all future sessions on the machine.
+
 ## OMP integration
 
 The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. At session start and session switches it looks up the assignment and registers it if missing. It does not distinguish sub-agents; processes use the session ID supplied by the harness. Install or link the extension into the OMP extension directory.

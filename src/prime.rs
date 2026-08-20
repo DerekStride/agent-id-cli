@@ -28,7 +28,7 @@ Session discovery, in order:
 1. An explicit `SESSION_ID` argument or `--session-id ID`.
 2. `AGENT_ID_SESSION_ID`.
 
-The realm is discovered from `--realm NAME`, `AGENT_REALM`, `$XDG_CONFIG_HOME/agent-id/realm`, or the legacy `$HOME/.config/agent-realm` file.
+The realm is discovered from `--realm NAME`, `AGENT_REALM` (for tests/overrides), or `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as the fallback. If no realm configuration exists, one is automatically selected and saved to the realm file.
 
 The registry is durable and defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.
 

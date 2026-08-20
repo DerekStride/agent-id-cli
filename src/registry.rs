@@ -221,18 +221,61 @@ fn resolve_realm(explicit: Option<&str>) -> Result<String> {
     let config_home = env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"));
-    let current_path = config_home.join("agent-id/realm");
-    let legacy_path = home.join(".config/agent-realm");
+    let realm_path = config_home.join("agent-id/realm");
 
-    for path in [current_path, legacy_path] {
-        if path.is_file() {
-            let value = fs::read_to_string(&path)
-                .with_context(|| format!("read realm from {}", path.display()))?;
-            return normalize_component(&value, "realm");
-        }
+    if realm_path.is_file() {
+        let value = fs::read_to_string(&realm_path)
+            .with_context(|| format!("read realm from {}", realm_path.display()))?;
+        return normalize_component(&value, "realm");
     }
 
-    bail!("no realm found; pass --realm NAME or set AGENT_REALM")
+    auto_create_realm(&realm_path)
+}
+
+fn auto_create_realm(path: &Path) -> Result<String> {
+    let candidates = names::candidate_realms();
+    if candidates.is_empty() {
+        bail!("bundled realm candidate list is empty");
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let pid = std::process::id();
+    let hostname = env::var("HOSTNAME").unwrap_or_default();
+    let digest = Sha256::digest(format!("{nanos}:{pid}:{hostname}").as_bytes());
+    let index = usize::try_from(u64::from_be_bytes(digest[0..8].try_into().unwrap())).unwrap_or(0)
+        % candidates.len();
+    let realm = normalize_component(candidates[index], "realm")?;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("realm path has no parent directory"))?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+
+    let temp = temporary_path(path);
+    let mut file = File::create(&temp)
+        .with_context(|| format!("create temporary realm {}", temp.display()))?;
+    file.write_all(format!("{realm}\n").as_bytes())?;
+    file.sync_all()?;
+
+    match fs::hard_link(&temp, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(temp);
+            Ok(realm)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(temp);
+            let value = fs::read_to_string(path)
+                .with_context(|| format!("read existing realm {}", path.display()))?;
+            normalize_component(&value, "realm")
+        }
+        Err(error) => {
+            let _ = fs::remove_file(temp);
+            Err(error).with_context(|| format!("create realm file {}", path.display()))
+        }
+    }
 }
 
 fn print_assignment(assignment: &Assignment, json: bool) -> Result<()> {
@@ -498,6 +541,37 @@ mod tests {
         assert_eq!(registry.lookup(&assignment.slug).unwrap(), assignment);
     }
 
+    #[test]
+    fn missing_realm_is_auto_created_and_reused() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let realm_file = config_dir.path().join("agent-id/realm");
+        assert!(!realm_file.exists());
+
+        let first = auto_create_realm(&realm_file).unwrap();
+        assert!(realm_file.is_file());
+        let contents = fs::read_to_string(&realm_file).unwrap();
+        assert_eq!(contents.trim(), first);
+
+        let second = auto_create_realm(&realm_file).unwrap();
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn concurrent_realm_creation_keeps_one_value() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let realm_file = std::sync::Arc::new(config_dir.path().join("agent-id/realm"));
+        let handles = (0..8)
+            .map(|_| {
+                let realm_file = std::sync::Arc::clone(&realm_file);
+                std::thread::spawn(move || auto_create_realm(&realm_file).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let mut handles = handles.into_iter();
+        let first = handles.next().unwrap().join().unwrap();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), first);
+        }
+    }
     #[test]
     fn registering_a_session_twice_fails() {
         let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());

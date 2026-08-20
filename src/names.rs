@@ -12,12 +12,18 @@ const FAMILY_NAME_DATA: &str = concat!(
     include_str!("../data/names/trades.txt"),
 );
 
+const REALM_DATA: &str = include_str!("../data/realms.txt");
+
 pub fn first_names() -> Vec<&'static str> {
     unique_words(FIRST_NAME_DATA)
 }
 
 pub fn family_names() -> Vec<&'static str> {
     unique_words(FAMILY_NAME_DATA)
+}
+
+pub fn candidate_realms() -> Vec<&'static str> {
+    unique_words(REALM_DATA)
 }
 
 fn unique_words(data: &'static str) -> Vec<&'static str> {

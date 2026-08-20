@@ -26,8 +26,9 @@ function ensureRegistered(): void {
   } catch {
     try {
       runAgentId(["register", "--json"]);
-    } catch {
-      console.warn("agent-id: unable to register the session identity");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(`agent-id: unable to register the session identity: ${detail}`);
     }
   }
 }
