@@ -32,6 +32,13 @@ agent-id discover --limit 20
 agent-id discover --recent 24 --realm Darkwood --json
 ```
 
+Prune old assignments by default, or preview with `--dry-run`:
+
+```bash
+agent-id prune --before 2026-08-01T00:00:00Z
+agent-id prune --before 2026-08-01T00:00:00Z --dry-run --json
+```
+
 ## Registry
 
 The registry defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.

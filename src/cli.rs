@@ -20,6 +20,8 @@ pub enum Commands {
     Lookup(LookupArgs),
     /// List recent identity assignments
     Discover(DiscoverArgs),
+    /// Remove identity assignments older than a cutoff
+    Prune(PruneArgs),
     /// Output the agent-facing identity workflow manual
     Prime(PrimeArgs),
 }
@@ -89,6 +91,21 @@ pub struct DiscoverArgs {
     pub realm: Option<String>,
 
     /// Print the complete assignments as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PruneArgs {
+    /// Remove records with updated_at before this RFC 3339 timestamp
+    #[arg(long, value_name = "TIMESTAMP", required = true)]
+    pub before: String,
+
+    /// Preview matching records without deleting them
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Print the prune report as JSON
     #[arg(long)]
     pub json: bool,
 }

@@ -187,6 +187,56 @@ fn discover_lists_recent_assignments() {
 }
 
 #[test]
+fn prune_defaults_to_apply_and_dry_run_previews() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "prune-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let assignment: Assignment = serde_json::from_slice(&registered.stdout).unwrap();
+
+    let cutoff = "2100-01-01T00:00:00Z";
+    let dry_run = command(&root)
+        .args(["prune", "--before", cutoff, "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(dry_run.status.success(), "{dry_run:?}");
+    let report: Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["candidates"].as_array().unwrap().len(), 1);
+
+    let still_present = command(&root)
+        .args(["lookup", assignment.session_id.as_str()])
+        .output()
+        .unwrap();
+    assert!(still_present.status.success(), "{still_present:?}");
+
+    let applied = command(&root)
+        .args(["prune", "--before", cutoff, "--json"])
+        .output()
+        .unwrap();
+    assert!(applied.status.success(), "{applied:?}");
+    let report: Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(report["dry_run"], false);
+    assert_eq!(report["removed"].as_array().unwrap().len(), 1);
+
+    let removed = command(&root)
+        .args(["lookup", assignment.session_id.as_str()])
+        .output()
+        .unwrap();
+    assert!(!removed.status.success());
+    assert!(!root
+        .path()
+        .join(format!("by-name/{}.json", assignment.slug))
+        .exists());
+    assert!(!root
+        .path()
+        .join(format!("by-name/{}", assignment.slug))
+        .exists());
+}
+
+#[test]
 fn registration_auto_creates_realm_when_missing() {
     let root = TempDir::new().unwrap();
     let config_dir = TempDir::new().unwrap();

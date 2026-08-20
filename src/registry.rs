@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    cli::{DiscoverArgs, LookupArgs, RegisterArgs},
+    cli::{DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
     names,
 };
 
@@ -28,6 +28,24 @@ pub struct Assignment {
     pub realm: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrunedIdentity {
+    pub session_id: String,
+    pub name: String,
+    pub slug: String,
+    pub updated_at: DateTime<Utc>,
+    pub claim_removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PruneReport {
+    pub cutoff: DateTime<Utc>,
+    pub dry_run: bool,
+    pub candidates: Vec<Assignment>,
+    pub removed: Vec<PrunedIdentity>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +236,95 @@ impl Registry {
         Ok(assignments)
     }
 
+    pub fn prune(&self, cutoff: DateTime<Utc>, dry_run: bool) -> Result<PruneReport> {
+        let path = self.root.join("by-session");
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PruneReport {
+                    cutoff,
+                    dry_run,
+                    candidates: Vec::new(),
+                    removed: Vec::new(),
+                    errors: Vec::new(),
+                })
+            }
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        let mut candidates = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let assignment = read_assignment(&path)
+                .with_context(|| format!("read assignment {}", path.display()))?;
+            if assignment.updated_at < cutoff {
+                candidates.push(assignment);
+            }
+        }
+        candidates.sort_by(|left, right| left.updated_at.cmp(&right.updated_at));
+        let mut report = PruneReport {
+            cutoff,
+            dry_run,
+            candidates,
+            removed: Vec::new(),
+            errors: Vec::new(),
+        };
+        if dry_run {
+            return Ok(report);
+        }
+
+        for assignment in &report.candidates {
+            let session_path = self.session_path(&assignment.session_id);
+            if let Err(error) = fs::remove_file(&session_path) {
+                report
+                    .errors
+                    .push(format!("remove {}: {error}", session_path.display()));
+                continue;
+            }
+
+            let claim_path = self.root.join("by-name").join(&assignment.slug);
+            let claim_removed = match fs::read_to_string(&claim_path) {
+                Ok(owner) if owner.trim() == assignment.session_id => {
+                    if let Err(error) = fs::remove_file(&claim_path) {
+                        report.errors.push(format!(
+                            "remove name claim {}: {error}",
+                            claim_path.display()
+                        ));
+                        false
+                    } else {
+                        true
+                    }
+                }
+                Ok(owner) => {
+                    report.errors.push(format!(
+                        "name claim {} belongs to {}, not {}",
+                        claim_path.display(),
+                        owner.trim(),
+                        assignment.session_id
+                    ));
+                    false
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => {
+                    report
+                        .errors
+                        .push(format!("read name claim {}: {error}", claim_path.display()));
+                    false
+                }
+            };
+            report.removed.push(PrunedIdentity {
+                session_id: assignment.session_id.clone(),
+                name: assignment.name.clone(),
+                slug: assignment.slug.clone(),
+                updated_at: assignment.updated_at,
+                claim_removed,
+            });
+        }
+        Ok(report)
+    }
+
     fn session_path(&self, session_id: &str) -> PathBuf {
         self.root
             .join("by-session")
@@ -256,6 +363,41 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn execute_prune(args: &PruneArgs) -> Result<()> {
+    let cutoff = DateTime::parse_from_rfc3339(&args.before)
+        .with_context(|| format!("parse --before timestamp {}", args.before))?
+        .with_timezone(&Utc);
+    let report = Registry::from_env()?.prune(cutoff, args.dry_run)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        let action = if args.dry_run {
+            "would prune"
+        } else {
+            "pruned"
+        };
+        println!(
+            "{action} {} identities before {}",
+            report.candidates.len(),
+            cutoff
+        );
+        for assignment in &report.candidates {
+            println!(
+                "{}\t{}\tupdated:{}",
+                assignment.name, assignment.session_id, assignment.updated_at
+            );
+        }
+        for error in &report.errors {
+            eprintln!("agent-id: {error}");
+        }
+    }
+    if report.errors.is_empty() {
+        Ok(())
+    } else {
+        bail!("prune completed with {} errors", report.errors.len())
+    }
 }
 
 pub fn resolve_session(explicit: Option<&str>) -> Result<String> {
