@@ -9,6 +9,6 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = agent_id::cli::Cli::parse();
-    agent_id::run(cli)
+    let cli = agent_id_cli::cli::Cli::parse();
+    agent_id_cli::run(cli)
 }

@@ -1,9 +1,10 @@
 [package]
-name = "agent-id"
+name = "agent-id-cli"
 version = "0.1.0"
 edition = "2021"
 description = "Portable identity registry for coding-agent sessions"
 license = "MIT"
+repository = "https://github.com/DerekStride/agent-id-cli"
 
 [[bin]]
 name = "agent-id"

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use agent_id::registry::Assignment;
+use agent_id_cli::registry::Assignment;
 use serde_json::Value;
 use tempfile::TempDir;
 
