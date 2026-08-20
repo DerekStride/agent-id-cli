@@ -22,7 +22,7 @@ agent-id lookup "Spring Oak of Darkwood"
 agent-id lookup spring-oak-darkwood
 ```
 
-Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
+Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`, then `OMP_SESSION_ID`, then `PI_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
 
 ## Registry
 
@@ -32,9 +32,7 @@ Session records are stored as `by-session/<session-id>.json`; session IDs must b
 
 Registration resolves the realm from `--realm`, `AGENT_REALM` (for tests/overrides), or `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as the fallback. If missing, a realm is automatically chosen and saved to the realm file for all future sessions on the machine.
 
-## OMP integration
-
-The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. At session start and session switches it looks up the assignment and registers it if missing. It does not distinguish sub-agents; processes use the session ID supplied by the harness. Install or link the extension into the OMP extension directory.
+The optional `extensions/agent-id.ts` adapter registers an OMP tool named `agent_identity`. The tool reads the authoritative session ID from the extension context, looks up or registers the assignment with explicit CLI arguments, and returns the complete JSON record. Lifecycle hooks perform the same lookup/register maintenance without relying on shell environment propagation. Install or link the extension into the OMP extension directory.
 
 ## Attribution
 
