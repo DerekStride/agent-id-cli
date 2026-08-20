@@ -30,7 +30,7 @@ The registry defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent
 
 ## OMP integration
 
-The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. Install or link it into the OMP extension directory.
+The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. At session start it looks up the assignment and registers it if missing. A child process inherits `AGENT_SURNAME` and registers with that family name; ordinary ephemeral prompts remain anonymous. Install or link the extension into the OMP extension directory.
 
 ## Attribution
 
