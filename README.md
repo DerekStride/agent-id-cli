@@ -14,15 +14,15 @@ Register a session:
 agent-id register SESSION_ID --family Oak --realm Darkwood
 ```
 
-Look up an existing session:
+Look up an existing identity by session ID, canonical name, or slug:
 
 ```bash
 agent-id lookup SESSION_ID
+agent-id lookup "Spring Oak of Darkwood"
+agent-id lookup spring-oak-darkwood
 ```
 
-Session discovery uses an explicit argument first, then `AGENT_ID_SESSION_ID`.
-
-Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
+Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
 
 ## Registry
 

@@ -124,7 +124,35 @@ impl Registry {
         bail!("exhausted available names for realm {realm}")
     }
 
-    pub fn lookup(&self, session_id: &str) -> Result<Assignment> {
+    pub fn lookup(&self, input: &str) -> Result<Assignment> {
+        let input = require_nonempty(input, "lookup identifier")?;
+        let session_path = self.session_path(&input);
+        if session_path.exists() {
+            return self.lookup_session(&input);
+        }
+
+        for slug in lookup_slugs(&input) {
+            let claim_path = self.root.join("by-name").join(&slug);
+            if !claim_path.is_file() {
+                continue;
+            }
+
+            let session_id = require_nonempty(
+                &fs::read_to_string(&claim_path)
+                    .with_context(|| format!("read name claim {}", claim_path.display()))?,
+                "claimed session ID",
+            )?;
+            return self
+                .lookup_session(&session_id)
+                .with_context(|| format!("resolve name claim {slug}"));
+        }
+
+        bail!(
+            "no identity found for '{input}'; lookup accepts a session ID, canonical name, or slug"
+        )
+    }
+
+    fn lookup_session(&self, session_id: &str) -> Result<Assignment> {
         let session_id = require_nonempty(session_id, "session ID")?;
         let path = self.session_path(&session_id);
         if !path.exists() {
@@ -156,8 +184,8 @@ pub fn execute_register(args: &RegisterArgs) -> Result<()> {
 }
 
 pub fn execute_lookup(args: &LookupArgs) -> Result<()> {
-    let session_id = resolve_session(args.explicit_session())?;
-    let assignment = Registry::from_env()?.lookup(&session_id)?;
+    let input = resolve_session(args.explicit_input())?;
+    let assignment = Registry::from_env()?.lookup(&input)?;
     print_assignment(&assignment, args.json)
 }
 
@@ -212,6 +240,43 @@ fn print_assignment(assignment: &Assignment, json: bool) -> Result<()> {
         println!("{}", assignment.name);
     }
     Ok(())
+}
+
+fn lookup_slugs(input: &str) -> Vec<String> {
+    let mut slugs = Vec::new();
+    let input = input.trim();
+    if is_slug(input) {
+        slugs.push(input.to_ascii_lowercase());
+    }
+    if let Some(slug) = canonical_name_slug(input) {
+        if !slugs.contains(&slug) {
+            slugs.push(slug);
+        }
+    }
+    slugs
+}
+
+fn canonical_name_slug(input: &str) -> Option<String> {
+    let mut parts = input.split_whitespace();
+    let first = normalize_component(parts.next()?, "first name").ok()?;
+    let family = normalize_component(parts.next()?, "family name").ok()?;
+    if !parts.next()?.eq_ignore_ascii_case("of") {
+        return None;
+    }
+    let realm = normalize_component(parts.next()?, "realm").ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(slug(&first, &family, &realm))
+}
+
+fn is_slug(input: &str) -> bool {
+    !input.is_empty()
+        && !input.starts_with('-')
+        && !input.ends_with('-')
+        && input
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
 }
 
 fn candidate<'a>(
@@ -390,6 +455,18 @@ mod tests {
     }
 
     #[test]
+    fn lookup_accepts_session_name_and_slug() {
+        let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
+        let assignment = registry
+            .register("session-lookup", Some("Oak"), "Darkwood")
+            .unwrap();
+
+        assert_eq!(registry.lookup(&assignment.session_id).unwrap(), assignment);
+        assert_eq!(registry.lookup(&assignment.name).unwrap(), assignment);
+        assert_eq!(registry.lookup(&assignment.slug).unwrap(), assignment);
+    }
+
+    #[test]
     fn registering_a_session_twice_fails() {
         let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
         registry.register("session-1", None, "Darkwood").unwrap();
@@ -403,6 +480,6 @@ mod tests {
     fn lookup_requires_a_registered_session() {
         let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
         let error = registry.lookup("missing").unwrap_err();
-        assert!(error.to_string().contains("no identity registered"));
+        assert!(error.to_string().contains("no identity found"));
     }
 }

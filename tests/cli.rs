@@ -64,6 +64,16 @@ fn json_contains_the_canonical_assignment() {
         .unwrap();
     let looked_up: Assignment = serde_json::from_slice(&lookup.stdout).unwrap();
     assert_eq!(looked_up, assignment);
+
+    for identifier in [assignment.name.as_str(), assignment.slug.as_str()] {
+        let lookup = command(&root)
+            .args(["lookup", identifier, "--json"])
+            .output()
+            .unwrap();
+        assert!(lookup.status.success(), "{lookup:?}");
+        let looked_up: Assignment = serde_json::from_slice(&lookup.stdout).unwrap();
+        assert_eq!(looked_up, assignment);
+    }
 }
 
 #[test]
@@ -122,7 +132,7 @@ fn lookup_fails_before_registration() {
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr)
         .unwrap()
-        .contains("no identity registered"));
+        .contains("no identity found"));
 }
 
 #[test]

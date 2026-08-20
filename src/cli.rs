@@ -53,11 +53,11 @@ impl RegisterArgs {
 
 #[derive(Debug, Args)]
 pub struct LookupArgs {
-    /// Harness session ID; falls back to AGENT_ID_SESSION_ID
-    #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
-    pub session: Option<String>,
+    /// Session ID, canonical name, or slug; falls back to AGENT_ID_SESSION_ID
+    #[arg(value_name = "IDENTIFIER", conflicts_with = "session_id")]
+    pub input: Option<String>,
 
-    /// Explicit harness session ID
+    /// Explicit session ID
     #[arg(long = "session-id", value_name = "ID")]
     pub session_id: Option<String>,
 
@@ -67,8 +67,8 @@ pub struct LookupArgs {
 }
 
 impl LookupArgs {
-    pub fn explicit_session(&self) -> Option<&str> {
-        self.session.as_deref().or(self.session_id.as_deref())
+    pub fn explicit_input(&self) -> Option<&str> {
+        self.input.as_deref().or(self.session_id.as_deref())
     }
 }
 
