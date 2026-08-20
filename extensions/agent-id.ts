@@ -8,11 +8,10 @@ type SessionContext = {
 
 type ExtensionAPI = {
   on(
-    event: "session_start",
+    event: "session_start" | "session_switch",
     handler: (event: unknown, context: SessionContext) => void,
   ): void;
 };
-
 function runAgentId(args: string[]): void {
   execFileSync("agent-id", args, {
     env: { ...process.env },
@@ -35,10 +34,10 @@ function ensureRegistered(): void {
 
 /**
  * Export the current harness session to child tool processes and ensure its
- * durable identity exists.
+ * durable identity exists on startup and session switches.
  */
 export default function agentIdExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", (_event, context) => {
+  const ensureSession = (_event: unknown, context: SessionContext): void => {
     const sessionId = context.sessionManager.getSessionId();
     if (!sessionId) {
       delete process.env.AGENT_ID_SESSION_ID;
@@ -47,5 +46,8 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
 
     process.env.AGENT_ID_SESSION_ID = sessionId;
     ensureRegistered();
-  });
+  };
+
+  pi.on("session_start", ensureSession);
+  pi.on("session_switch", ensureSession);
 }

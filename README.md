@@ -32,7 +32,7 @@ Session records are stored as `by-session/<session-id>.json`; session IDs must b
 
 ## OMP integration
 
-The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. At session start it looks up the assignment and registers it if missing. It does not distinguish sub-agents; processes use the session ID supplied by the harness. Install or link the extension into the OMP extension directory.
+The optional `extensions/agent-id.ts` adapter exports the current OMP session as `AGENT_ID_SESSION_ID` for child tool processes. At session start and session switches it looks up the assignment and registers it if missing. It does not distinguish sub-agents; processes use the session ID supplied by the harness. Install or link the extension into the OMP extension directory.
 
 ## Attribution
 
