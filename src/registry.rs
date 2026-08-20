@@ -56,7 +56,7 @@ impl Registry {
         family_name: Option<&str>,
         realm: &str,
     ) -> Result<Assignment> {
-        let session_id = require_nonempty(session_id, "session ID")?;
+        let session_id = validate_session_id(session_id)?;
         let session_path = self.session_path(&session_id);
         if session_path.exists() {
             let existing = read_assignment(&session_path)
@@ -126,9 +126,11 @@ impl Registry {
 
     pub fn lookup(&self, input: &str) -> Result<Assignment> {
         let input = require_nonempty(input, "lookup identifier")?;
-        let session_path = self.session_path(&input);
-        if session_path.exists() {
-            return self.lookup_session(&input);
+        if let Ok(session_id) = validate_session_id(&input) {
+            let session_path = self.session_path(&session_id);
+            if session_path.exists() {
+                return self.lookup_session(&session_id);
+            }
         }
 
         for slug in lookup_slugs(&input) {
@@ -153,7 +155,7 @@ impl Registry {
     }
 
     fn lookup_session(&self, session_id: &str) -> Result<Assignment> {
-        let session_id = require_nonempty(session_id, "session ID")?;
+        let session_id = validate_session_id(session_id)?;
         let path = self.session_path(&session_id);
         if !path.exists() {
             bail!(
@@ -172,7 +174,7 @@ impl Registry {
     fn session_path(&self, session_id: &str) -> PathBuf {
         self.root
             .join("by-session")
-            .join(format!("{}.json", session_key(session_id)))
+            .join(format!("{session_id}.json"))
     }
 }
 
@@ -374,10 +376,6 @@ fn temporary_path(path: &Path) -> PathBuf {
     path.with_extension(format!("tmp-{}-{nanos}", std::process::id()))
 }
 
-fn session_key(session_id: &str) -> String {
-    hex::encode(Sha256::digest(session_id.as_bytes()))
-}
-
 fn slug(first_name: &str, family_name: &str, realm: &str) -> String {
     [first_name, family_name, realm]
         .iter()
@@ -412,6 +410,17 @@ fn title_word(value: &str) -> String {
         return String::new();
     };
     first.to_uppercase().collect::<String>() + &characters.as_str().to_ascii_lowercase()
+}
+
+fn validate_session_id(value: &str) -> Result<String> {
+    let value = require_nonempty(value, "session ID")?;
+    let safe = value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'));
+    if !safe || value == "." || value == ".." {
+        bail!("session ID must be a filename-safe value using letters, digits, '.', '_' or '-'");
+    }
+    Ok(value)
 }
 
 fn require_nonempty(value: &str, kind: &str) -> Result<String> {
@@ -452,6 +461,29 @@ mod tests {
             assignment.name,
             format!("{} Oak of Darkwood", assignment.first_name)
         );
+    }
+
+    #[test]
+    fn session_id_is_the_registry_filename() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = Registry::new(root.path().to_path_buf());
+        registry
+            .register("session-visible", None, "Darkwood")
+            .unwrap();
+
+        assert!(root
+            .path()
+            .join("by-session/session-visible.json")
+            .is_file());
+    }
+
+    #[test]
+    fn unsafe_session_ids_are_rejected() {
+        let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
+        let error = registry
+            .register("../escape", None, "Darkwood")
+            .unwrap_err();
+        assert!(error.to_string().contains("filename-safe"));
     }
 
     #[test]

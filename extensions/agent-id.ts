@@ -65,7 +65,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
       ephemeral && !family
         ? undefined
         : context.sessionManager.getSessionId() ??
-          (family ? `subagent:${randomUUID()}` : undefined);
+          (family ? `subagent-${randomUUID()}` : undefined);
     if (!sessionId) {
       delete process.env.AGENT_ID_SESSION_ID;
       delete process.env.AGENT_SURNAME;
