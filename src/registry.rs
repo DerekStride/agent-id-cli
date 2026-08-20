@@ -166,16 +166,14 @@ pub fn resolve_session(explicit: Option<&str>) -> Result<String> {
         return Ok(session_id.trim().to_string());
     }
 
-    for key in ["AGENT_SESSION_ID", "OMP_SESSION_ID", "PI_SESSION_ID"] {
-        if let Some(value) = env::var_os(key) {
-            let value = value.to_string_lossy();
-            if !value.trim().is_empty() {
-                return Ok(value.trim().to_string());
-            }
+    if let Some(value) = env::var_os("AGENT_ID_SESSION_ID") {
+        let value = value.to_string_lossy();
+        if !value.trim().is_empty() {
+            return Ok(value.trim().to_string());
         }
     }
 
-    bail!("no session ID found; pass SESSION_ID or --session-id, or set AGENT_SESSION_ID")
+    bail!("no session ID found; pass SESSION_ID or --session-id, or set AGENT_ID_SESSION_ID")
 }
 
 fn resolve_realm(explicit: Option<&str>) -> Result<String> {

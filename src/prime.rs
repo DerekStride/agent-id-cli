@@ -26,8 +26,7 @@ The identity is keyed by the harness session ID. Do not invent a name or registe
 Session discovery, in order:
 
 1. An explicit `SESSION_ID` argument or `--session-id ID`.
-2. `AGENT_SESSION_ID`.
-3. `OMP_SESSION_ID`.
+2. `AGENT_ID_SESSION_ID`.
 
 The realm is discovered from `--realm NAME`, `AGENT_REALM`, `$XDG_CONFIG_HOME/agent-id/realm`, or the legacy `$HOME/.config/agent-realm` file.
 
@@ -38,10 +37,10 @@ A missing session ID is an error. A missing lookup is an error; register the ses
 ## Examples
 
 ```bash
-agent-id register "$OMP_SESSION_ID"
-agent-id register --family Oak "$OMP_SESSION_ID"
-agent-id lookup "$OMP_SESSION_ID"
-agent-id register --json --family Oak "$OMP_SESSION_ID"
+agent-id register "$AGENT_ID_SESSION_ID"
+agent-id register --family Oak "$AGENT_ID_SESSION_ID"
+agent-id lookup "$AGENT_ID_SESSION_ID"
+agent-id register --json --family Oak "$AGENT_ID_SESSION_ID"
 ```
 
 The default output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, and assignment timestamp."#;

@@ -24,7 +24,7 @@ pub enum Commands {
 
 #[derive(Debug, Args)]
 pub struct RegisterArgs {
-    /// Harness session ID; falls back to AGENT_SESSION_ID or OMP_SESSION_ID
+    /// Harness session ID; falls back to AGENT_ID_SESSION_ID
     #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
     pub session: Option<String>,
 
@@ -53,7 +53,7 @@ impl RegisterArgs {
 
 #[derive(Debug, Args)]
 pub struct LookupArgs {
-    /// Harness session ID; falls back to AGENT_SESSION_ID or OMP_SESSION_ID
+    /// Harness session ID; falls back to AGENT_ID_SESSION_ID
     #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
     pub session: Option<String>,
 

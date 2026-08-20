@@ -9,6 +9,7 @@ fn command(root: &TempDir) -> Command {
     command
         .env("AGENT_ID_HOME", root.path())
         .env("AGENT_REALM", "Darkwood")
+        .env_remove("AGENT_ID_SESSION_ID")
         .env_remove("AGENT_SESSION_ID")
         .env_remove("OMP_SESSION_ID")
         .env_remove("PI_SESSION_ID");
@@ -87,7 +88,7 @@ fn register_rejects_a_session_that_already_has_an_identity() {
 fn commands_discover_session_id_from_environment() {
     let root = TempDir::new().unwrap();
     let mut register = command(&root);
-    register.env("OMP_SESSION_ID", "env-session");
+    register.env("AGENT_ID_SESSION_ID", "env-session");
     let registered = register
         .args(["register", "--family", "Oak"])
         .output()
@@ -95,10 +96,23 @@ fn commands_discover_session_id_from_environment() {
     assert!(registered.status.success(), "{registered:?}");
 
     let mut lookup = command(&root);
-    lookup.env("AGENT_SESSION_ID", "env-session");
+    lookup.env("AGENT_ID_SESSION_ID", "env-session");
     let looked_up = lookup.args(["lookup"]).output().unwrap();
     assert!(looked_up.status.success(), "{looked_up:?}");
     assert_eq!(looked_up.stdout, registered.stdout);
+}
+
+#[test]
+fn legacy_session_environment_names_are_ignored() {
+    let root = TempDir::new().unwrap();
+    let mut command = command(&root);
+    command.env("OMP_SESSION_ID", "legacy-session");
+    let output = command.args(["lookup"]).output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("no session ID found"));
 }
 
 #[test]
