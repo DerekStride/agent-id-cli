@@ -18,6 +18,8 @@ pub enum Commands {
     Register(RegisterArgs),
     /// Look up the identity already registered for a session
     Lookup(LookupArgs),
+    /// List recent identity assignments
+    Discover(DiscoverArgs),
     /// Output the agent-facing identity workflow manual
     Prime(PrimeArgs),
 }
@@ -70,6 +72,25 @@ impl LookupArgs {
     pub fn explicit_input(&self) -> Option<&str> {
         self.input.as_deref().or(self.session_id.as_deref())
     }
+}
+
+#[derive(Debug, Args)]
+pub struct DiscoverArgs {
+    /// Maximum records to print; zero prints all records
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+
+    /// Only include records updated within this many hours
+    #[arg(long, value_name = "HOURS")]
+    pub recent: Option<i64>,
+
+    /// Only include records in this realm
+    #[arg(long, value_name = "NAME")]
+    pub realm: Option<String>,
+
+    /// Print the complete assignments as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

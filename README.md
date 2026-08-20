@@ -24,6 +24,14 @@ agent-id lookup spring-oak-darkwood
 
 Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`, then `OMP_SESSION_ID`, then `PI_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
 
+List recent identities sorted by `updated_at`:
+
+```bash
+agent-id discover
+agent-id discover --limit 20
+agent-id discover --recent 24 --realm Darkwood --json
+```
+
 ## Registry
 
 The registry defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.

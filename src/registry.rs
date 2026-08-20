@@ -3,16 +3,17 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    cli::{LookupArgs, RegisterArgs},
+    cli::{DiscoverArgs, LookupArgs, RegisterArgs},
     names,
 };
 
@@ -25,7 +26,8 @@ pub struct Assignment {
     pub first_name: String,
     pub family_name: String,
     pub realm: String,
-    pub assigned_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,12 +61,11 @@ impl Registry {
         let session_id = validate_session_id(session_id)?;
         let session_path = self.session_path(&session_id);
         if session_path.exists() {
-            let existing = read_assignment(&session_path)
+            let mut existing = read_assignment(&session_path)
                 .with_context(|| format!("read existing assignment {}", session_path.display()))?;
-            bail!(
-                "session {session_id} already has an identity: {}",
-                existing.name
-            );
+            existing.updated_at = Utc::now();
+            replace_assignment(&session_path, &existing)?;
+            return Ok(existing);
         }
 
         let realm = normalize_component(realm, "realm")?;
@@ -107,6 +108,7 @@ impl Registry {
                 Claim::Other => continue,
             }
 
+            let now = Utc::now();
             let assignment = Assignment {
                 version: 1,
                 session_id: session_id.clone(),
@@ -115,7 +117,8 @@ impl Registry {
                 first_name,
                 family_name,
                 realm: realm.clone(),
-                assigned_at: Utc::now(),
+                created_at: now,
+                updated_at: now,
             };
             write_assignment(&session_path, &assignment)?;
             return Ok(assignment);
@@ -170,6 +173,50 @@ impl Registry {
         }
         Ok(assignment)
     }
+    pub fn discover(
+        &self,
+        limit: usize,
+        recent_hours: Option<i64>,
+        realm: Option<&str>,
+    ) -> Result<Vec<Assignment>> {
+        if recent_hours.is_some_and(|hours| hours < 0) {
+            bail!("--recent must be non-negative");
+        }
+        let realm = realm
+            .map(|value| normalize_component(value, "realm"))
+            .transpose()?;
+        let cutoff = recent_hours.map(|hours| Utc::now() - Duration::hours(hours));
+        let path = self.root.join("by-session");
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        let mut assignments = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let assignment = read_assignment(&path)
+                .with_context(|| format!("read assignment {}", path.display()))?;
+            if realm
+                .as_deref()
+                .is_some_and(|value| value != assignment.realm)
+            {
+                continue;
+            }
+            if cutoff.is_some_and(|value| assignment.updated_at < value) {
+                continue;
+            }
+            assignments.push(assignment);
+        }
+        assignments.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        if limit > 0 {
+            assignments.truncate(limit);
+        }
+        Ok(assignments)
+    }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
         self.root
@@ -189,6 +236,26 @@ pub fn execute_lookup(args: &LookupArgs) -> Result<()> {
     let input = resolve_session(args.explicit_input())?;
     let assignment = Registry::from_env()?.lookup(&input)?;
     print_assignment(&assignment, args.json)
+}
+
+pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
+    let assignments =
+        Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref())?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&assignments)?);
+    } else if assignments.is_empty() {
+        println!("(no identities)");
+    } else {
+        for assignment in assignments {
+            println!(
+                "{}\t{}\tupdated:{}",
+                assignment.name,
+                assignment.session_id,
+                assignment.updated_at.to_rfc3339()
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_session(explicit: Option<&str>) -> Result<String> {
@@ -410,17 +477,40 @@ fn write_assignment(path: &Path, assignment: &Assignment) -> Result<()> {
     result
 }
 
+fn replace_assignment(path: &Path, assignment: &Assignment) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("assignment has no parent directory"))?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let contents = format!("{}\n", serde_json::to_string_pretty(assignment)?);
+    let temp = temporary_path(path);
+    let mut file = File::create(&temp)
+        .with_context(|| format!("create temporary assignment {}", temp.display()))?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+
+    let result =
+        fs::rename(&temp, path).with_context(|| format!("replace assignment {}", path.display()));
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
 fn read_assignment(path: &Path) -> Result<Assignment> {
     let contents = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&contents)?)
 }
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temporary_path(path: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    path.with_extension(format!("tmp-{}-{nanos}", std::process::id()))
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("tmp-{}-{nanos}-{counter}", std::process::id()))
 }
 
 fn slug(first_name: &str, family_name: &str, realm: &str) -> String {
@@ -577,13 +667,15 @@ mod tests {
         }
     }
     #[test]
-    fn registering_a_session_twice_fails() {
+    fn registering_a_session_updates_existing_identity() {
         let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
-        registry.register("session-1", None, "Darkwood").unwrap();
-        let error = registry
-            .register("session-1", None, "Darkwood")
-            .unwrap_err();
-        assert!(error.to_string().contains("already has an identity"));
+        let first = registry.register("session-1", None, "Darkwood").unwrap();
+        let second = registry.register("session-1", None, "Darkwood").unwrap();
+
+        assert_eq!(second.name, first.name);
+        assert_eq!(second.session_id, first.session_id);
+        assert_eq!(second.created_at, first.created_at);
+        assert!(second.updated_at >= first.updated_at);
     }
 
     #[test]

@@ -50,18 +50,11 @@ function runAgentId(args: string[]): string {
   });
 }
 
-function lookupOrRegister(sessionId: string): IdentityResult {
-  try {
-    return {
-      output: runAgentId(["lookup", "--session-id", sessionId, "--json"]),
-      registered: false,
-    };
-  } catch {
-    return {
-      output: runAgentId(["register", "--session-id", sessionId, "--json"]),
-      registered: true,
-    };
-  }
+function registerIdentity(sessionId: string): IdentityResult {
+  return {
+    output: runAgentId(["register", "--session-id", sessionId, "--json"]),
+    registered: true,
+  };
 }
 
 function reportSession(context: SessionContext): void {
@@ -69,7 +62,7 @@ function reportSession(context: SessionContext): void {
   if (!sessionId) return;
 
   try {
-    lookupOrRegister(sessionId);
+    registerIdentity(sessionId);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to register the session identity: ${detail}`);
@@ -102,7 +95,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
       }
 
       try {
-        const result = lookupOrRegister(sessionId);
+        const result = registerIdentity(sessionId);
         return {
           content: [{ type: "text", text: result.output.trim() }],
           details: { session_id: sessionId, registered: result.registered },

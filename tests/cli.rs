@@ -77,21 +77,25 @@ fn json_contains_the_canonical_assignment() {
 }
 
 #[test]
-fn register_rejects_a_session_that_already_has_an_identity() {
+fn register_returns_and_updates_an_existing_identity() {
     let root = TempDir::new().unwrap();
     let first = command(&root)
-        .args(["register", "session-3"])
+        .args(["register", "session-3", "--json"])
         .output()
         .unwrap();
     assert!(first.status.success(), "{first:?}");
+    let first: Assignment = serde_json::from_slice(&first.stdout).unwrap();
 
     let second = command(&root)
-        .args(["register", "session-3"])
+        .args(["register", "session-3", "--json"])
         .output()
         .unwrap();
-    assert!(!second.status.success());
-    let error = String::from_utf8(second.stderr).unwrap();
-    assert!(error.contains("already has an identity"), "{error:?}");
+    assert!(second.status.success(), "{second:?}");
+    let second: Assignment = serde_json::from_slice(&second.stdout).unwrap();
+
+    assert_eq!(second.name, first.name);
+    assert_eq!(second.created_at, first.created_at);
+    assert!(second.updated_at >= first.updated_at);
 }
 
 #[test]
@@ -167,6 +171,36 @@ fn prime_json_contains_the_command_contract() {
     let documentation = value["documentation"].as_str().unwrap();
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
+}
+
+#[test]
+fn discover_lists_recent_assignments() {
+    let root = TempDir::new().unwrap();
+    for session_id in ["discover-one", "discover-two"] {
+        let output = command(&root)
+            .args(["register", session_id, "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    let output = command(&root)
+        .args(["discover", "--json", "--realm", "Darkwood", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].realm, "Darkwood");
+
+    let output = command(&root)
+        .args(["discover", "--json", "--recent", "1"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(assignments.len(), 2);
+    assert!(assignments[0].updated_at >= assignments[1].updated_at);
 }
 
 #[test]

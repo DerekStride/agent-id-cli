@@ -45,13 +45,13 @@ agent-id lookup "$AGENT_ID_SESSION_ID"
 agent-id register --json --family Oak "$AGENT_ID_SESSION_ID"
 ```
 
-The default output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, and assignment timestamp."#;
+The default output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, and created/updated timestamps."#;
 
     if prelude_only {
         return prelude.to_string();
     }
 
     format!(
-        "{prelude}\n\n## Commands\n\n### `agent-id register [SESSION_ID]` — Allocate a permanent identity\n\n```\n--family NAME       Prefer a family name, useful for child agents\n--realm NAME        Select the computer realm\n--session-id ID     Provide the session ID explicitly\n--json              Print the complete assignment as JSON\n```\n\nFails if the session already has a registered identity.\n\n### `agent-id lookup [IDENTIFIER]` — Read an existing identity\n\nIDENTIFIER may be a session ID, canonical name, or slug. Without an explicit identifier, lookup uses AGENT_ID_SESSION_ID.\n\n```\n--session-id ID     Provide the session ID explicitly\n--json              Print the complete assignment as JSON\n```\n\nFails if the identifier has not been registered.\n\n### `agent-id prime` — Print this workflow manual\n\n```\n--prelude           Omit the command reference\n--json              Wrap the manual in a JSON object\n```"
+        "{prelude}\n\n## Commands\n\n### `agent-id register [SESSION_ID]` — Allocate a permanent identity\n\n```\n--family NAME       Prefer a family name, useful for child agents\n--realm NAME        Select the computer realm\n--session-id ID     Provide the session ID explicitly\n--json              Print the complete assignment as JSON\n```\n\nRegistration is idempotent: an existing session keeps its identity and receives a new `updated_at`.\n\n### `agent-id lookup [IDENTIFIER]` — Read an existing identity\n\nIDENTIFIER may be a session ID, canonical name, or slug. Without an explicit identifier, lookup uses the session environment.\n\n```\n--session-id ID     Provide the session ID explicitly\n--json              Print the complete assignment as JSON\n```\n\nFails if the identifier has not been registered.\n\n### `agent-id discover` — List recent identities\n\n```\n--limit N           Maximum records (default 20; zero means all)\n--recent HOURS      Only records updated within this many hours\n--realm NAME        Only records in this realm\n--json              Print the complete assignments as JSON\n```\n\nResults are sorted by `updated_at`, newest first.\n\n### `agent-id prime` — Print this workflow manual\n\n```\n--prelude           Omit the command reference\n--json              Wrap the manual in a JSON object\n```"
     )
 }
