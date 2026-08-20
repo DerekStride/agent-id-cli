@@ -22,7 +22,7 @@ agent-id lookup "Spring Oak of Darkwood"
 agent-id lookup spring-oak-darkwood
 ```
 
-Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`, then `OMP_SESSION_ID`, then `PI_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
+Without an explicit identifier, lookup uses `AGENT_ID_SESSION_ID`. Use `--json` for machine-readable assignment records. Use `agent-id prime` for the complete agent-facing workflow documentation.
 
 List recent identities sorted by `updated_at`:
 

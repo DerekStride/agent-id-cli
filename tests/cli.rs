@@ -117,38 +117,21 @@ fn commands_discover_session_id_from_environment() {
 }
 
 #[test]
-fn commands_discover_session_id_from_harness_environment() {
+fn legacy_session_environment_names_are_ignored() {
     let root = TempDir::new().unwrap();
-    for (key, session_id) in [
+    for (key, value) in [
         ("OMP_SESSION_ID", "omp-session"),
         ("PI_SESSION_ID", "pi-session"),
     ] {
-        let registered = command(&root)
-            .args(["register", session_id])
-            .output()
-            .unwrap();
-        assert!(registered.status.success(), "{registered:?}");
+        let mut command = command(&root);
+        command.env(key, value);
+        let output = command.args(["lookup"]).output().unwrap();
 
-        let mut lookup = command(&root);
-        lookup.env(key, session_id);
-        let looked_up = lookup.args(["lookup"]).output().unwrap();
-        assert!(looked_up.status.success(), "{looked_up:?}");
-        assert_eq!(looked_up.stdout, registered.stdout);
+        assert!(!output.status.success());
+        assert!(String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("no session ID found"));
     }
-    let registered = command(&root)
-        .args(["register", "canonical-session"])
-        .output()
-        .unwrap();
-    assert!(registered.status.success(), "{registered:?}");
-
-    let mut lookup = command(&root);
-    lookup
-        .env("AGENT_ID_SESSION_ID", "canonical-session")
-        .env("OMP_SESSION_ID", "omp-session")
-        .env("PI_SESSION_ID", "pi-session");
-    let looked_up = lookup.args(["lookup"]).output().unwrap();
-    assert!(looked_up.status.success(), "{looked_up:?}");
-    assert_eq!(looked_up.stdout, registered.stdout);
 }
 
 #[test]
