@@ -8,8 +8,22 @@ type SessionContext = {
 
 type ToolResult = {
   content: [{ type: "text"; text: string }];
-  details?: { session_id: string; registered: boolean };
+  details?: {
+    session_id: string;
+    registered: boolean;
+    summary_updated?: boolean;
+  };
   isError?: boolean;
+};
+
+type IdentityParams = {
+  summary?: string;
+  clear_summary?: boolean;
+};
+
+type ToolParameter = {
+  type: "string" | "boolean";
+  description: string;
 };
 
 type ExtensionAPI = {
@@ -24,12 +38,12 @@ type ExtensionAPI = {
     loadMode?: "essential";
     parameters: {
       type: "object";
-      properties: Record<string, never>;
+      properties: Record<string, ToolParameter>;
       additionalProperties: false;
     };
     execute(
       id: string,
-      params: Record<string, never>,
+      params: IdentityParams,
       signal: AbortSignal,
       onUpdate: unknown,
       context: SessionContext,
@@ -103,6 +117,20 @@ function registerIdentity(sessionId: string): IdentityResult {
   return { output, assignment: parseAssignment(output), registered: true };
 }
 
+function annotateIdentity(
+  sessionId: string,
+  summary: string | null,
+): IdentityResult {
+  const args = ["annotate", "--session-id", sessionId, "--json"];
+  if (summary === null) {
+    args.push("--clear-summary");
+  } else {
+    args.push("--summary", summary);
+  }
+  const output = runAgentId(args);
+  return { output, assignment: parseAssignment(output), registered: false };
+}
+
 function ensureIdentity(sessionId: string): IdentityResult {
   try {
     return lookupIdentity(sessionId);
@@ -159,14 +187,23 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
     name: "agent_identity",
     label: "Agent Identity",
     description:
-      "Look up or register the current agent session identity and return its complete assignment.",
+      "Look up or register the current agent session identity, optionally update its current-work summary, and return the complete assignment.",
     loadMode: "essential",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        summary: {
+          type: "string",
+          description: "Concise summary of the agent's current work.",
+        },
+        clear_summary: {
+          type: "boolean",
+          description: "Remove the current-work summary when true.",
+        },
+      },
       additionalProperties: false,
     },
-    async execute(_id, _params, _signal, _onUpdate, context) {
+    async execute(_id, params, _signal, _onUpdate, context) {
       const sessionId = context.sessionManager.getSessionId();
       if (!sessionId) {
         return {
@@ -176,11 +213,28 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
       }
 
       try {
-        const result = ensureIdentity(sessionId);
+        const clearSummary = params.clear_summary === true;
+        if (params.summary !== undefined && clearSummary) {
+          throw new Error("summary and clear_summary are mutually exclusive");
+        }
+
+        let result = ensureIdentity(sessionId);
+        const summaryUpdated = params.summary !== undefined || clearSummary;
+        if (params.summary !== undefined) {
+          const annotated = annotateIdentity(sessionId, params.summary);
+          result = { ...annotated, registered: result.registered };
+        } else if (clearSummary) {
+          const annotated = annotateIdentity(sessionId, null);
+          result = { ...annotated, registered: result.registered };
+        }
         exportIdentity(result.assignment);
         return {
           content: [{ type: "text", text: result.output.trim() }],
-          details: { session_id: sessionId, registered: result.registered },
+          details: {
+            session_id: sessionId,
+            registered: result.registered,
+            summary_updated: summaryUpdated,
+          },
         };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

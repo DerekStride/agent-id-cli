@@ -77,6 +77,69 @@ fn json_contains_the_canonical_assignment() {
 }
 
 #[test]
+fn annotate_updates_discovers_and_clears_summary() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "summary-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let registered: Assignment = serde_json::from_slice(&registered.stdout).unwrap();
+
+    let annotated = command(&root)
+        .args([
+            "annotate",
+            "summary-session",
+            "--summary",
+            "  Implementing\n  activity summaries  ",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(annotated.status.success(), "{annotated:?}");
+    let annotated: Assignment = serde_json::from_slice(&annotated.stdout).unwrap();
+    let summary = annotated.summary.as_ref().unwrap();
+    assert_eq!(summary.text, "Implementing activity summaries");
+    assert!(summary.updated_at >= registered.updated_at);
+    assert_eq!(annotated.name, registered.name);
+    assert_eq!(annotated.created_at, registered.created_at);
+
+    let lookup = command(&root)
+        .args(["lookup", "summary-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(lookup.status.success(), "{lookup:?}");
+    assert_eq!(
+        serde_json::from_slice::<Assignment>(&lookup.stdout).unwrap(),
+        annotated
+    );
+
+    let discovered = command(&root)
+        .args(["discover", "--json"])
+        .output()
+        .unwrap();
+    assert!(discovered.status.success(), "{discovered:?}");
+    let discovered: Vec<Assignment> = serde_json::from_slice(&discovered.stdout).unwrap();
+    assert_eq!(discovered, vec![annotated.clone()]);
+
+    let human = command(&root).args(["discover"]).output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    assert!(String::from_utf8(human.stdout)
+        .unwrap()
+        .contains("summary:Implementing activity summaries"));
+
+    let cleared = command(&root)
+        .args(["annotate", "summary-session", "--clear-summary", "--json"])
+        .output()
+        .unwrap();
+    assert!(cleared.status.success(), "{cleared:?}");
+    let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert_eq!(cleared.summary, None);
+    assert_eq!(cleared.name, registered.name);
+    assert_eq!(cleared.created_at, registered.created_at);
+}
+
+#[test]
 fn register_returns_and_updates_an_existing_identity() {
     let root = TempDir::new().unwrap();
     let first = command(&root)
@@ -154,6 +217,7 @@ fn prime_json_contains_the_command_contract() {
     let documentation = value["documentation"].as_str().unwrap();
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
+    assert!(documentation.contains("agent-id annotate"));
 }
 
 #[test]

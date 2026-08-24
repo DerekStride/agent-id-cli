@@ -18,6 +18,8 @@ pub enum Commands {
     Register(RegisterArgs),
     /// Look up the identity already registered for a session
     Lookup(LookupArgs),
+    /// Set or clear the current-work summary for a registered session
+    Annotate(AnnotateArgs),
     /// List recent identity assignments
     Discover(DiscoverArgs),
     /// Remove identity assignments older than a cutoff
@@ -73,6 +75,35 @@ pub struct LookupArgs {
 impl LookupArgs {
     pub fn explicit_input(&self) -> Option<&str> {
         self.input.as_deref().or(self.session_id.as_deref())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct AnnotateArgs {
+    /// Harness session ID; falls back to AGENT_ID_SESSION_ID
+    #[arg(value_name = "SESSION_ID", conflicts_with = "session_id")]
+    pub session: Option<String>,
+
+    /// Explicit harness session ID
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// Set the concise current-work summary
+    #[arg(long, value_name = "TEXT", required_unless_present = "clear_summary")]
+    pub summary: Option<String>,
+
+    /// Remove the current-work summary
+    #[arg(long, conflicts_with = "summary")]
+    pub clear_summary: bool,
+
+    /// Print the complete assignment as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl AnnotateArgs {
+    pub fn explicit_session(&self) -> Option<&str> {
+        self.session.as_deref().or(self.session_id.as_deref())
     }
 }
 

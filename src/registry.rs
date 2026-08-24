@@ -13,9 +13,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    cli::{DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
+    cli::{AnnotateArgs, DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
     names,
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivitySummary {
+    pub text: String,
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Assignment {
@@ -26,6 +32,8 @@ pub struct Assignment {
     pub first_name: String,
     pub family_name: String,
     pub realm: String,
+    #[serde(default)]
+    pub summary: Option<ActivitySummary>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -135,6 +143,7 @@ impl Registry {
                 first_name,
                 family_name,
                 realm: realm.clone(),
+                summary: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -191,6 +200,21 @@ impl Registry {
         }
         Ok(assignment)
     }
+
+    pub fn annotate(&self, session_id: &str, summary: Option<&str>) -> Result<Assignment> {
+        let session_id = validate_session_id(session_id)?;
+        let mut assignment = self.lookup_session(&session_id)?;
+        let summary = summary.map(normalize_summary).transpose()?;
+        let now = Utc::now();
+        assignment.summary = summary.map(|text| ActivitySummary {
+            text,
+            updated_at: now,
+        });
+        assignment.updated_at = now;
+        replace_assignment(&self.session_path(&session_id), &assignment)?;
+        Ok(assignment)
+    }
+
     pub fn discover(
         &self,
         limit: usize,
@@ -345,6 +369,17 @@ pub fn execute_lookup(args: &LookupArgs) -> Result<()> {
     print_assignment(&assignment, args.json)
 }
 
+pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
+    let session_id = resolve_session(args.explicit_session())?;
+    let summary = match (args.summary.as_deref(), args.clear_summary) {
+        (Some(summary), false) => Some(summary),
+        (None, true) => None,
+        _ => bail!("pass exactly one of --summary or --clear-summary"),
+    };
+    let assignment = Registry::from_env()?.annotate(&session_id, summary)?;
+    print_assignment(&assignment, args.json)
+}
+
 pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
     let assignments =
         Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref())?;
@@ -354,12 +389,22 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
         println!("(no identities)");
     } else {
         for assignment in assignments {
-            println!(
-                "{}\t{}\tupdated:{}",
-                assignment.name,
-                assignment.session_id,
-                assignment.updated_at.to_rfc3339()
-            );
+            if let Some(summary) = assignment.summary {
+                println!(
+                    "{}\t{}\tsummary:{}\tupdated:{}",
+                    assignment.name,
+                    assignment.session_id,
+                    summary.text,
+                    assignment.updated_at.to_rfc3339()
+                );
+            } else {
+                println!(
+                    "{}\t{}\tupdated:{}",
+                    assignment.name,
+                    assignment.session_id,
+                    assignment.updated_at.to_rfc3339()
+                );
+            }
         }
     }
     Ok(())
@@ -698,6 +743,25 @@ fn validate_session_id(value: &str) -> Result<String> {
     Ok(value)
 }
 
+const MAX_SUMMARY_CHARS: usize = 240;
+
+fn normalize_summary(value: &str) -> Result<String> {
+    let mut normalized = String::new();
+    for word in value.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+    }
+    if normalized.is_empty() {
+        bail!("summary cannot be empty");
+    }
+    if normalized.chars().count() > MAX_SUMMARY_CHARS {
+        bail!("summary must be at most {MAX_SUMMARY_CHARS} characters");
+    }
+    Ok(normalized)
+}
+
 fn require_nonempty(value: &str, kind: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -804,6 +868,17 @@ mod tests {
             assert_eq!(handle.join().unwrap(), first);
         }
     }
+
+    #[test]
+    fn summaries_are_single_line_and_bounded() {
+        assert_eq!(
+            normalize_summary("  Implementing\n activity summaries  ").unwrap(),
+            "Implementing activity summaries"
+        );
+        assert!(normalize_summary(" \n\t ").is_err());
+        assert!(normalize_summary(&"x".repeat(MAX_SUMMARY_CHARS + 1)).is_err());
+    }
+
     #[test]
     fn registering_a_session_updates_existing_identity() {
         let registry = Registry::new(tempfile::tempdir().unwrap().path().to_path_buf());
