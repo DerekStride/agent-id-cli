@@ -124,9 +124,13 @@ fn annotate_updates_discovers_and_clears_summary() {
 
     let human = command(&root).args(["discover"]).output().unwrap();
     assert!(human.status.success(), "{human:?}");
-    assert!(String::from_utf8(human.stdout)
-        .unwrap()
-        .contains("summary:Implementing activity summaries"));
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        format!(
+            "{}\t{}\tsummary:Implementing activity summaries\n",
+            annotated.name, annotated.session_id
+        )
+    );
 
     let cleared = command(&root)
         .args(["annotate", "summary-session", "--clear-summary", "--json"])
@@ -137,6 +141,13 @@ fn annotate_updates_discovers_and_clears_summary() {
     assert_eq!(cleared.summary, None);
     assert_eq!(cleared.name, registered.name);
     assert_eq!(cleared.created_at, registered.created_at);
+
+    let human = command(&root).args(["discover"]).output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        format!("{}\t{}\n", cleared.name, cleared.session_id)
+    );
 }
 
 #[test]

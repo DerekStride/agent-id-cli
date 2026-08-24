@@ -391,19 +391,11 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
         for assignment in assignments {
             if let Some(summary) = assignment.summary {
                 println!(
-                    "{}\t{}\tsummary:{}\tupdated:{}",
-                    assignment.name,
-                    assignment.session_id,
-                    summary.text,
-                    assignment.updated_at.to_rfc3339()
+                    "{}\t{}\tsummary:{}",
+                    assignment.name, assignment.session_id, summary.text
                 );
             } else {
-                println!(
-                    "{}\t{}\tupdated:{}",
-                    assignment.name,
-                    assignment.session_id,
-                    assignment.updated_at.to_rfc3339()
-                );
+                println!("{}\t{}", assignment.name, assignment.session_id);
             }
         }
     }
