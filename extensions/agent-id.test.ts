@@ -5,7 +5,11 @@ import {
   AUTO_SUMMARY_ENTRY_TYPE,
   AUTO_SUMMARY_LIMIT,
   AUTO_SUMMARY_MAX_CHARS,
+  CONTEXT_MESSAGE_CONTENT,
+  CONTEXT_MESSAGE_TYPE,
+  branchHasContextMessage,
   buildSummaryInput,
+  ensureContextMessage,
   latestExchange,
   normalizeAutoSummary,
   restoreAutoSummaryState,
@@ -21,6 +25,42 @@ describe("activity state contract", () => {
       "blocked",
       "stopped",
     ]);
+  });
+});
+
+describe("identity context message", () => {
+  test("adds one hidden message and deduplicates it on the branch", () => {
+    const entries: Array<{ type: string; customType?: string }> = [];
+    const sent: Array<{
+      customType: string;
+      content: string;
+      display: boolean;
+    }> = [];
+    const context = {
+      sessionManager: {
+        getSessionId: () => "context-session",
+        getBranch: () => entries,
+      },
+      models: { resolve: () => undefined },
+      modelRegistry: { resolver: () => undefined },
+    };
+    const sendMessage = (message: (typeof sent)[number]) => {
+      sent.push(message);
+      entries.push({ type: "custom_message", customType: message.customType });
+    };
+
+    expect(branchHasContextMessage(entries)).toBe(false);
+    ensureContextMessage(context, sendMessage);
+    ensureContextMessage(context, sendMessage);
+
+    expect(sent).toEqual([
+      {
+        customType: CONTEXT_MESSAGE_TYPE,
+        content: CONTEXT_MESSAGE_CONTENT,
+        display: false,
+      },
+    ]);
+    expect(branchHasContextMessage(entries)).toBe(true);
   });
 });
 

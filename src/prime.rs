@@ -32,6 +32,8 @@ The realm is discovered from `--realm NAME`, `AGENT_REALM` (for tests/overrides)
 
 The registry is durable and defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.
 
+When you need to understand the identity system or discover other agents, run `agent-id prime`. The extension provides this guidance once per session branch, including tree navigation, without repeating it on every prompt.
+
 A missing session ID is an error. A missing lookup is an error; register the session first.
 
 ## Examples
