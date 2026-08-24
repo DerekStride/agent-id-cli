@@ -1,9 +1,36 @@
 import { execFileSync } from "node:child_process";
 
+type MessageContent = string | Array<{ type: string; text?: string }>;
+
+type AgentMessageLike = {
+  role: string;
+  content?: MessageContent;
+  synthetic?: boolean;
+  steering?: boolean;
+  timestamp?: number;
+};
+
+type SessionEntryLike = {
+  type: string;
+  customType?: string;
+  data?: unknown;
+};
+
+type SummaryModel = { provider: string; id: string; baseUrl?: string };
+
 type SessionContext = {
   sessionManager: {
     getSessionId(): string | undefined;
+    getBranch(): SessionEntryLike[];
   };
+  models: { resolve(spec: string): SummaryModel | undefined };
+  modelRegistry: { resolver(model: SummaryModel, sessionId?: string): unknown };
+};
+
+type AgentEndEvent = {
+  type: "agent_end";
+  messages: AgentMessageLike[];
+  willContinue?: boolean;
 };
 
 type ToolResult = {
@@ -28,9 +55,20 @@ type ToolParameter = {
 
 type ExtensionAPI = {
   on(
-    event: "session_start" | "session_switch" | "agent_start",
+    event:
+      | "session_start"
+      | "session_switch"
+      | "session_branch"
+      | "session_tree"
+      | "session_shutdown"
+      | "agent_start",
     handler: (event: unknown, context: SessionContext) => void,
   ): void;
+  on(
+    event: "agent_end",
+    handler: (event: AgentEndEvent, context: SessionContext) => Promise<void>,
+  ): void;
+  appendEntry(customType: string, data: unknown): void;
   registerTool(tool: {
     name: string;
     label: string;
@@ -178,10 +216,308 @@ function reportSession(context: SessionContext): void {
   }
 }
 
+export const AUTO_SUMMARY_ENTRY_TYPE = "dev.derekstride.agent-id.auto-summary";
+export const AUTO_SUMMARY_LIMIT = 3;
+export const AUTO_SUMMARY_MAX_CHARS = 80;
+const AUTO_SUMMARY_MAX_TOKENS = 64;
+const AUTO_SUMMARY_INPUT_CHARS = 2000;
+const AUTO_SUMMARY_TIMEOUT_MS = 20_000;
+const AUTO_SUMMARY_MODEL_ROLES = ["@tiny", "@smol"] as const;
+
+const AUTO_SUMMARY_PROMPT = [
+  "Write a short present-tense phrase naming the concrete work of a coding session.",
+  "",
+  "Rules:",
+  `- At most ${AUTO_SUMMARY_MAX_CHARS} characters.`,
+  "- Describe the work, not the conversation.",
+  "- Never mention the user, the assistant, or an agent identity.",
+  "- Never describe progress or completion state.",
+  '- Never begin with "Working on".',
+  "- Return the phrase alone, without quotes or a trailing period.",
+].join("\n");
+
+export type AutoSummaryState = {
+  version: 1;
+  generations: number;
+  turnKey: string;
+  summary: string;
+};
+
+export type SummaryExchange = {
+  turnKey: string;
+  request: string;
+  response: string;
+};
+
+type CompleteSimple = (
+  model: SummaryModel,
+  context: {
+    systemPrompt: string[];
+    messages: Array<{ role: "user"; content: string; timestamp: number }>;
+  },
+  options: {
+    apiKey: unknown;
+    maxTokens: number;
+    disableReasoning: boolean;
+    signal: AbortSignal;
+  },
+) => Promise<{
+  content: Array<{ type: string; text?: string }>;
+  stopReason: string;
+}>;
+
+type SummarySession = {
+  state: AutoSummaryState | null;
+  queue: Promise<void>;
+  abort: AbortController;
+};
+
+const summarySessions = new Map<string, SummarySession>();
+let completionModule: Promise<CompleteSimple | null> | undefined;
+
+function messageText(content: MessageContent | undefined): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
+export function latestExchange(
+  messages: readonly AgentMessageLike[],
+): SummaryExchange | null {
+  let response = "";
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === "assistant") {
+      if (!response) response = messageText(message.content);
+      continue;
+    }
+    if (message.role !== "user" || message.synthetic || message.steering) {
+      continue;
+    }
+    const request = messageText(message.content);
+    if (!request) continue;
+    return {
+      turnKey: String(message.timestamp ?? index),
+      request: request.slice(0, AUTO_SUMMARY_INPUT_CHARS),
+      response: response.slice(0, AUTO_SUMMARY_INPUT_CHARS),
+    };
+  }
+  return null;
+}
+
+export function buildSummaryInput(
+  exchange: SummaryExchange,
+  previous: string | null,
+): string {
+  const sections: string[] = [];
+  if (previous) sections.push(`Previous summary:\n${previous}`);
+  sections.push(`Latest request:\n${exchange.request}`);
+  if (exchange.response) {
+    sections.push(`Latest response:\n${exchange.response}`);
+  }
+  return sections.join("\n\n");
+}
+
+export function normalizeAutoSummary(raw: string): string | null {
+  const firstLine = raw.split(/\r?\n/).find((line) => line.trim().length > 0);
+  if (!firstLine) return null;
+  const collapsed = firstLine.trim().replace(/\s+/g, " ");
+  const unquoted = collapsed.replace(/^["'`]+|["'`]+$/g, "");
+  const trimmed = unquoted.replace(/\.+$/, "").trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= AUTO_SUMMARY_MAX_CHARS) return trimmed;
+  const cut = trimmed.slice(0, AUTO_SUMMARY_MAX_CHARS);
+  const boundary = cut.lastIndexOf(" ");
+  return (boundary > 0 ? cut.slice(0, boundary) : cut).trim() || null;
+}
+
+function isAutoSummaryState(value: unknown): value is AutoSummaryState {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    "version" in value &&
+    value.version === 1 &&
+    "generations" in value &&
+    typeof value.generations === "number" &&
+    "turnKey" in value &&
+    typeof value.turnKey === "string" &&
+    "summary" in value &&
+    typeof value.summary === "string"
+  );
+}
+
+export function restoreAutoSummaryState(
+  entries: readonly SessionEntryLike[],
+): AutoSummaryState | null {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (!entry || entry.type !== "custom") continue;
+    if (entry.customType !== AUTO_SUMMARY_ENTRY_TYPE) continue;
+    if (isAutoSummaryState(entry.data)) return entry.data;
+  }
+  return null;
+}
+
+export function shouldSummarize(
+  state: AutoSummaryState | null,
+  turnKey: string,
+): boolean {
+  if (!state) return true;
+  if (state.generations >= AUTO_SUMMARY_LIMIT) return false;
+  return state.turnKey !== turnKey;
+}
+
+// The host rewrites this specifier onto its own bundled pi-ai copy. Importing
+// lazily keeps identity registration working when that resolution fails.
+function loadCompletion(): Promise<CompleteSimple | null> {
+  completionModule ??= import("@oh-my-pi/pi-ai")
+    .then((module: unknown) => {
+      if (typeof module !== "object" || module === null) return null;
+      if (!("completeSimple" in module)) return null;
+      if (typeof module.completeSimple !== "function") return null;
+      // Host-bundled pi-ai export; its call signature cannot be checked here.
+      const complete = module.completeSimple as CompleteSimple;
+      return complete;
+    })
+    .catch(() => null);
+  return completionModule;
+}
+
+function summarySession(sessionId: string): SummarySession {
+  const existing = summarySessions.get(sessionId);
+  if (existing) return existing;
+  const created: SummarySession = {
+    state: null,
+    queue: Promise.resolve(),
+    abort: new AbortController(),
+  };
+  summarySessions.set(sessionId, created);
+  return created;
+}
+
+function restoreSummarySession(context: SessionContext): void {
+  const sessionId = context.sessionManager.getSessionId();
+  if (!sessionId) return;
+  const session = summarySession(sessionId);
+  session.abort.abort();
+  session.abort = new AbortController();
+  try {
+    session.state = restoreAutoSummaryState(context.sessionManager.getBranch());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`agent-id: unable to restore the summary state: ${detail}`);
+    session.state = null;
+  }
+}
+
+async function summarizeExchange(
+  context: SessionContext,
+  sessionId: string,
+  input: string,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const complete = await loadCompletion();
+  if (!complete) return null;
+
+  let model: SummaryModel | undefined;
+  for (const role of AUTO_SUMMARY_MODEL_ROLES) {
+    model = context.models.resolve(role);
+    if (model) break;
+  }
+  if (!model) return null;
+
+  const response = await complete(
+    model,
+    {
+      systemPrompt: [AUTO_SUMMARY_PROMPT],
+      messages: [{ role: "user", content: input, timestamp: Date.now() }],
+    },
+    {
+      apiKey: context.modelRegistry.resolver(model, sessionId),
+      maxTokens: AUTO_SUMMARY_MAX_TOKENS,
+      disableReasoning: true,
+      signal,
+    },
+  );
+  if (response.stopReason === "error" || response.stopReason === "aborted") {
+    return null;
+  }
+  return normalizeAutoSummary(messageText(response.content));
+}
+
+async function maintainAutoSummary(
+  pi: ExtensionAPI,
+  context: SessionContext,
+  sessionId: string,
+  session: SummarySession,
+  event: AgentEndEvent,
+): Promise<void> {
+  try {
+    const exchange = latestExchange(event.messages);
+    if (!exchange) return;
+    if (!shouldSummarize(session.state, exchange.turnKey)) return;
+
+    const signal = AbortSignal.any([
+      session.abort.signal,
+      AbortSignal.timeout(AUTO_SUMMARY_TIMEOUT_MS),
+    ]);
+    const summary = await summarizeExchange(
+      context,
+      sessionId,
+      buildSummaryInput(exchange, session.state?.summary ?? null),
+      signal,
+    );
+    if (!summary || signal.aborted) return;
+    if (context.sessionManager.getSessionId() !== sessionId) return;
+
+    ensureIdentity(sessionId);
+    exportIdentity(annotateIdentity(sessionId, summary).assignment);
+
+    const state: AutoSummaryState = {
+      version: 1,
+      generations: (session.state?.generations ?? 0) + 1,
+      turnKey: exchange.turnKey,
+      summary,
+    };
+    session.state = state;
+    pi.appendEntry(AUTO_SUMMARY_ENTRY_TYPE, state);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`agent-id: unable to update the session summary: ${detail}`);
+  }
+}
+
 export default function agentIdExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", (_event, context) => reportSession(context));
-  pi.on("session_switch", (_event, context) => reportSession(context));
+  pi.on("session_start", (_event, context) => {
+    reportSession(context);
+    restoreSummarySession(context);
+  });
+  pi.on("session_switch", (_event, context) => {
+    reportSession(context);
+    restoreSummarySession(context);
+  });
+  pi.on("session_branch", (_event, context) => restoreSummarySession(context));
+  pi.on("session_tree", (_event, context) => restoreSummarySession(context));
   pi.on("agent_start", (_event, context) => reportSession(context));
+  pi.on("session_shutdown", () => {
+    for (const session of summarySessions.values()) session.abort.abort();
+    summarySessions.clear();
+  });
+
+  pi.on("agent_end", async (event, context) => {
+    if (event.willContinue) return;
+    const sessionId = context.sessionManager.getSessionId();
+    if (!sessionId) return;
+    const session = summarySession(sessionId);
+    session.queue = session.queue.then(() =>
+      maintainAutoSummary(pi, context, sessionId, session, event),
+    );
+    await session.queue;
+  });
 
   pi.registerTool({
     name: "agent_identity",

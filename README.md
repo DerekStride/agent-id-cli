@@ -58,6 +58,8 @@ Registration resolves the realm from `--realm`, `AGENT_REALM` (for tests/overrid
 
 The optional `extensions/agent-id.ts` adapter registers an OMP tool named `agent_identity`. The tool reads the authoritative session ID from the extension context, looks up or registers the assignment with explicit CLI arguments, and returns the complete JSON record. Pass `summary` to publish current work or `clear_summary: true` to remove it. Lifecycle hooks perform the same lookup/register maintenance without relying on shell environment propagation. Install or link the extension into the OMP extension directory.
 
+The extension also fills the summary in on its own. After each of the first three completed agent turns it runs one bounded completion against the `@tiny` model role (falling back to `@smol`), sending only the previous summary, the latest request, and the latest reply. The generated phrase is capped at 80 characters and written through `agent-id annotate`, so the main conversation, system prompt, and prompt cache are untouched. Generation state is persisted as a session entry, survives resume and branching, and stops after three successful updates; explicit `agent_identity` calls remain authoritative afterwards. When no tiny model is authenticated, automatic summaries are skipped and identity registration continues unaffected.
+
 ## Attribution
 
 The identity-and-mail coordination model was inspired by Josh Beckman's `agent-mail` script:
