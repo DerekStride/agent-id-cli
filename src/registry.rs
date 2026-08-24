@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    activity::{ActivityState, ActivityStateValue},
     cli::{AnnotateArgs, DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
     names,
 };
@@ -21,6 +22,14 @@ use crate::{
 pub struct ActivitySummary {
     pub text: String,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivityUpdate {
+    pub summary: Option<String>,
+    pub clear_summary: bool,
+    pub state: Option<ActivityStateValue>,
+    pub clear_state: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +43,8 @@ pub struct Assignment {
     pub realm: String,
     #[serde(default)]
     pub summary: Option<ActivitySummary>,
+    #[serde(default)]
+    pub state: Option<ActivityState>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -143,6 +154,7 @@ impl Registry {
                 first_name,
                 family_name,
                 realm: realm.clone(),
+                state: None,
                 summary: None,
                 created_at: now,
                 updated_at: now,
@@ -201,15 +213,45 @@ impl Registry {
         Ok(assignment)
     }
 
-    pub fn annotate(&self, session_id: &str, summary: Option<&str>) -> Result<Assignment> {
+    pub fn annotate(&self, session_id: &str, update: ActivityUpdate) -> Result<Assignment> {
         let session_id = validate_session_id(session_id)?;
+        if update.summary.is_none()
+            && !update.clear_summary
+            && update.state.is_none()
+            && !update.clear_state
+        {
+            bail!("pass at least one activity update");
+        }
+        if update.summary.is_some() && update.clear_summary {
+            bail!("summary and clear_summary are mutually exclusive");
+        }
+        if update.state.is_some() && update.clear_state {
+            bail!("state and clear_state are mutually exclusive");
+        }
+
         let mut assignment = self.lookup_session(&session_id)?;
-        let summary = summary.map(normalize_summary).transpose()?;
+        let summary = update
+            .summary
+            .as_deref()
+            .map(normalize_summary)
+            .transpose()?;
         let now = Utc::now();
-        assignment.summary = summary.map(|text| ActivitySummary {
-            text,
-            updated_at: now,
-        });
+        if update.summary.is_some() {
+            assignment.summary = summary.map(|text| ActivitySummary {
+                text,
+                updated_at: now,
+            });
+        } else if update.clear_summary {
+            assignment.summary = None;
+        }
+        if let Some(value) = update.state {
+            assignment.state = Some(ActivityState {
+                value,
+                updated_at: now,
+            });
+        } else if update.clear_state {
+            assignment.state = None;
+        }
         assignment.updated_at = now;
         replace_assignment(&self.session_path(&session_id), &assignment)?;
         Ok(assignment)
@@ -371,12 +413,13 @@ pub fn execute_lookup(args: &LookupArgs) -> Result<()> {
 
 pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
     let session_id = resolve_session(args.explicit_session())?;
-    let summary = match (args.summary.as_deref(), args.clear_summary) {
-        (Some(summary), false) => Some(summary),
-        (None, true) => None,
-        _ => bail!("pass exactly one of --summary or --clear-summary"),
+    let update = ActivityUpdate {
+        summary: args.summary.clone(),
+        clear_summary: args.clear_summary,
+        state: args.state,
+        clear_state: args.clear_state,
     };
-    let assignment = Registry::from_env()?.annotate(&session_id, summary)?;
+    let assignment = Registry::from_env()?.annotate(&session_id, update)?;
     print_assignment(&assignment, args.json)
 }
 
@@ -389,13 +432,22 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
         println!("(no identities)");
     } else {
         for assignment in assignments {
-            if let Some(summary) = assignment.summary {
-                println!(
-                    "{}\t{}\tsummary:{}",
-                    assignment.name, assignment.session_id, summary.text
-                );
-            } else {
+            let mut annotations = Vec::new();
+            if let Some(state) = assignment.state.as_ref() {
+                annotations.push(format!("state:{}", state.value));
+            }
+            if let Some(summary) = assignment.summary.as_ref() {
+                annotations.push(format!("summary:{}", summary.text));
+            }
+            if annotations.is_empty() {
                 println!("{}\t{}", assignment.name, assignment.session_id);
+            } else {
+                println!(
+                    "{}\t{}\t{}",
+                    assignment.name,
+                    assignment.session_id,
+                    annotations.join("\t")
+                );
             }
         }
     }

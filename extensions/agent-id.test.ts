@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  ACTIVITY_STATE_VALUES,
   AUTO_SUMMARY_ENTRY_TYPE,
   AUTO_SUMMARY_LIMIT,
   AUTO_SUMMARY_MAX_CHARS,
@@ -10,6 +11,18 @@ import {
   restoreAutoSummaryState,
   shouldSummarize,
 } from "./agent-id";
+
+describe("activity state contract", () => {
+  test("exposes stable lifecycle values", () => {
+    expect(ACTIVITY_STATE_VALUES).toEqual([
+      "working",
+      "idle",
+      "waiting",
+      "blocked",
+      "stopped",
+    ]);
+  });
+});
 
 describe("latestExchange", () => {
   test("pairs the newest real request with the newest assistant reply", () => {

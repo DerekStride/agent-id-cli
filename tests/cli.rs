@@ -151,6 +151,71 @@ fn annotate_updates_discovers_and_clears_summary() {
 }
 
 #[test]
+fn annotate_updates_state_independently_from_summary() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "state-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let registered: Assignment = serde_json::from_slice(&registered.stdout).unwrap();
+
+    let working = command(&root)
+        .args(["annotate", "state-session", "--state", "working", "--json"])
+        .output()
+        .unwrap();
+    assert!(working.status.success(), "{working:?}");
+    let working: Assignment = serde_json::from_slice(&working.stdout).unwrap();
+    assert_eq!(working.state.as_ref().unwrap().value.to_string(), "working");
+    assert_eq!(working.summary, None);
+    assert_eq!(working.name, registered.name);
+    assert_eq!(working.created_at, registered.created_at);
+    assert!(working.updated_at >= registered.updated_at);
+
+    let waiting = command(&root)
+        .args([
+            "annotate",
+            "state-session",
+            "--summary",
+            "Waiting for review",
+            "--state",
+            "waiting",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(waiting.status.success(), "{waiting:?}");
+    let waiting: Assignment = serde_json::from_slice(&waiting.stdout).unwrap();
+    assert_eq!(waiting.summary.as_ref().unwrap().text, "Waiting for review");
+    assert_eq!(waiting.state.as_ref().unwrap().value.to_string(), "waiting");
+
+    let human = command(&root).args(["discover"]).output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        format!(
+            "{}\t{}\tstate:waiting\tsummary:Waiting for review\n",
+            waiting.name, waiting.session_id
+        )
+    );
+
+    let cleared = command(&root)
+        .args(["annotate", "state-session", "--clear-state", "--json"])
+        .output()
+        .unwrap();
+    assert!(cleared.status.success(), "{cleared:?}");
+    let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert_eq!(cleared.state, None);
+    assert_eq!(cleared.summary.as_ref().unwrap().text, "Waiting for review");
+
+    let invalid = command(&root)
+        .args(["annotate", "state-session", "--state", "unknown"])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+}
+
+#[test]
 fn register_returns_and_updates_an_existing_identity() {
     let root = TempDir::new().unwrap();
     let first = command(&root)
@@ -229,6 +294,8 @@ fn prime_json_contains_the_command_contract() {
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
     assert!(documentation.contains("agent-id annotate"));
+    assert!(documentation.contains("--state VALUE"));
+    assert!(documentation.contains("stopped"));
 }
 
 #[test]

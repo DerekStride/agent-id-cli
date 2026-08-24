@@ -39,23 +39,42 @@ type ToolResult = {
     session_id: string;
     registered: boolean;
     summary_updated?: boolean;
+    state_updated?: boolean;
   };
   isError?: boolean;
 };
-
-type IdentityParams = {
+export const ACTIVITY_STATE_VALUES = [
+  "working",
+  "idle",
+  "waiting",
+  "blocked",
+  "stopped",
+] as const;
+type ActivityStateValue = (typeof ACTIVITY_STATE_VALUES)[number];
+type ActivityUpdate = {
   summary?: string;
   clear_summary?: boolean;
+  state?: ActivityStateValue;
+  clear_state?: boolean;
+};
+
+type ActivityState = {
+  value: ActivityStateValue;
+  updated_at: string;
 };
 
 type ToolParameter = {
   type: "string" | "boolean";
   description: string;
+  enum?: readonly string[];
 };
 
 type ExtensionAPI = {
   on(
     event:
+      | "session_before_switch"
+      | "session_before_branch"
+      | "session_before_tree"
       | "session_start"
       | "session_switch"
       | "session_branch"
@@ -81,7 +100,7 @@ type ExtensionAPI = {
     };
     execute(
       id: string,
-      params: IdentityParams,
+      params: ActivityUpdate,
       signal: AbortSignal,
       onUpdate: unknown,
       context: SessionContext,
@@ -96,6 +115,8 @@ type Assignment = {
   first_name: string;
   family_name: string;
   realm: string;
+  summary?: { text: string; updated_at: string } | null;
+  state?: ActivityState | null;
 };
 
 type IdentityResult = {
@@ -157,13 +178,20 @@ function registerIdentity(sessionId: string): IdentityResult {
 
 function annotateIdentity(
   sessionId: string,
-  summary: string | null,
+  update: ActivityUpdate,
 ): IdentityResult {
   const args = ["annotate", "--session-id", sessionId, "--json"];
-  if (summary === null) {
+  if (update.summary !== undefined) {
+    args.push("--summary", update.summary);
+  }
+  if (update.clear_summary) {
     args.push("--clear-summary");
-  } else {
-    args.push("--summary", summary);
+  }
+  if (update.state !== undefined) {
+    args.push("--state", update.state);
+  }
+  if (update.clear_state) {
+    args.push("--clear-state");
   }
   const output = runAgentId(args);
   return { output, assignment: parseAssignment(output), registered: false };
@@ -200,6 +228,19 @@ function exportIdentity(assignment: Assignment): void {
   process.env.AGENT_ID_FIRST_NAME = assignment.first_name;
   process.env.AGENT_ID_FAMILY_NAME = assignment.family_name;
   process.env.AGENT_ID_REALM = assignment.realm;
+}
+
+function updateActivityState(context: SessionContext, value: ActivityStateValue): void {
+  const sessionId = context.sessionManager.getSessionId();
+  if (!sessionId) return;
+  try {
+    ensureIdentity(sessionId);
+    const result = annotateIdentity(sessionId, { state: value });
+    exportIdentity(result.assignment);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`agent-id: unable to update the activity state: ${detail}`);
+  }
 }
 
 function reportSession(context: SessionContext): void {
@@ -270,6 +311,7 @@ type SummarySession = {
   state: AutoSummaryState | null;
   queue: Promise<void>;
   abort: AbortController;
+  epoch: number;
 };
 
 const summarySessions = new Map<string, SummarySession>();
@@ -394,6 +436,7 @@ function summarySession(sessionId: string): SummarySession {
     state: null,
     queue: Promise.resolve(),
     abort: new AbortController(),
+    epoch: 0,
   };
   summarySessions.set(sessionId, created);
   return created;
@@ -405,6 +448,7 @@ function restoreSummarySession(context: SessionContext): void {
   const session = summarySession(sessionId);
   session.abort.abort();
   session.abort = new AbortController();
+  session.epoch += 1;
   try {
     session.state = restoreAutoSummaryState(context.sessionManager.getBranch());
   } catch (error) {
@@ -412,6 +456,15 @@ function restoreSummarySession(context: SessionContext): void {
     console.warn(`agent-id: unable to restore the summary state: ${detail}`);
     session.state = null;
   }
+}
+
+function abortSummarySession(context: SessionContext): void {
+  const sessionId = context.sessionManager.getSessionId();
+  if (!sessionId) return;
+  const session = summarySessions.get(sessionId);
+  if (!session) return;
+  session.abort.abort();
+  session.epoch += 1;
 }
 
 async function summarizeExchange(
@@ -455,14 +508,17 @@ async function maintainAutoSummary(
   sessionId: string,
   session: SummarySession,
   event: AgentEndEvent,
+  controller: AbortController,
+  epoch: number,
 ): Promise<void> {
   try {
+    if (session.epoch !== epoch || controller.signal.aborted) return;
     const exchange = latestExchange(event.messages);
     if (!exchange) return;
     if (!shouldSummarize(session.state, exchange.turnKey)) return;
 
     const signal = AbortSignal.any([
-      session.abort.signal,
+      controller.signal,
       AbortSignal.timeout(AUTO_SUMMARY_TIMEOUT_MS),
     ]);
     const summary = await summarizeExchange(
@@ -471,11 +527,19 @@ async function maintainAutoSummary(
       buildSummaryInput(exchange, session.state?.summary ?? null),
       signal,
     );
-    if (!summary || signal.aborted) return;
+    if (
+      !summary ||
+      signal.aborted ||
+      session.epoch !== epoch ||
+      controller.signal.aborted
+    ) {
+      return;
+    }
     if (context.sessionManager.getSessionId() !== sessionId) return;
 
     ensureIdentity(sessionId);
-    exportIdentity(annotateIdentity(sessionId, summary).assignment);
+    if (session.epoch !== epoch || controller.signal.aborted) return;
+    exportIdentity(annotateIdentity(sessionId, { summary }).assignment);
 
     const state: AutoSummaryState = {
       version: 1,
@@ -492,18 +556,31 @@ async function maintainAutoSummary(
 }
 
 export default function agentIdExtension(pi: ExtensionAPI): void {
+  pi.on("session_before_switch", (_event, context) => abortSummarySession(context));
+  pi.on("session_before_branch", (_event, context) => abortSummarySession(context));
+  pi.on("session_before_tree", (_event, context) => abortSummarySession(context));
   pi.on("session_start", (_event, context) => {
     reportSession(context);
+    updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_switch", (_event, context) => {
     reportSession(context);
+    updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
-  pi.on("session_branch", (_event, context) => restoreSummarySession(context));
+  pi.on("session_branch", (_event, context) => {
+    reportSession(context);
+    updateActivityState(context, "idle");
+    restoreSummarySession(context);
+  });
   pi.on("session_tree", (_event, context) => restoreSummarySession(context));
-  pi.on("agent_start", (_event, context) => reportSession(context));
-  pi.on("session_shutdown", () => {
+  pi.on("agent_start", (_event, context) => {
+    reportSession(context);
+    updateActivityState(context, "working");
+  });
+  pi.on("session_shutdown", (_event, context) => {
+    updateActivityState(context, "stopped");
     for (const session of summarySessions.values()) session.abort.abort();
     summarySessions.clear();
   });
@@ -513,17 +590,28 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
     const sessionId = context.sessionManager.getSessionId();
     if (!sessionId) return;
     const session = summarySession(sessionId);
-    session.queue = session.queue.then(() =>
-      maintainAutoSummary(pi, context, sessionId, session, event),
-    );
+    const controller = session.abort;
+    const epoch = session.epoch;
+    session.queue = session.queue.then(async () => {
+      if (session.epoch !== epoch || controller.signal.aborted) return;
+      updateActivityState(context, "idle");
+      await maintainAutoSummary(
+        pi,
+        context,
+        sessionId,
+        session,
+        event,
+        controller,
+        epoch,
+      );
+    });
     await session.queue;
   });
-
   pi.registerTool({
     name: "agent_identity",
     label: "Agent Identity",
     description:
-      "Look up or register the current agent session identity, optionally update its current-work summary, and return the complete assignment.",
+      "Look up or register the current agent session identity, optionally update its summary or activity state, and return the complete assignment.",
     loadMode: "essential",
     parameters: {
       type: "object",
@@ -535,6 +623,15 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
         clear_summary: {
           type: "boolean",
           description: "Remove the current-work summary when true.",
+        },
+        state: {
+          type: "string",
+          enum: ACTIVITY_STATE_VALUES,
+          description: "Set the current activity state.",
+        },
+        clear_state: {
+          type: "boolean",
+          description: "Remove the current activity state when true.",
         },
       },
       additionalProperties: false,
@@ -550,17 +647,24 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
 
       try {
         const clearSummary = params.clear_summary === true;
+        const clearState = params.clear_state === true;
         if (params.summary !== undefined && clearSummary) {
           throw new Error("summary and clear_summary are mutually exclusive");
+        }
+        if (params.state !== undefined && clearState) {
+          throw new Error("state and clear_state are mutually exclusive");
         }
 
         let result = ensureIdentity(sessionId);
         const summaryUpdated = params.summary !== undefined || clearSummary;
-        if (params.summary !== undefined) {
-          const annotated = annotateIdentity(sessionId, params.summary);
-          result = { ...annotated, registered: result.registered };
-        } else if (clearSummary) {
-          const annotated = annotateIdentity(sessionId, null);
+        const stateUpdated = params.state !== undefined || clearState;
+        if (summaryUpdated || stateUpdated) {
+          const annotated = annotateIdentity(sessionId, {
+            summary: params.summary,
+            clear_summary: clearSummary,
+            state: params.state,
+            clear_state: clearState,
+          });
           result = { ...annotated, registered: result.registered };
         }
         exportIdentity(result.assignment);
@@ -570,6 +674,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
             session_id: sessionId,
             registered: result.registered,
             summary_updated: summaryUpdated,
+            state_updated: stateUpdated,
           },
         };
       } catch (error) {

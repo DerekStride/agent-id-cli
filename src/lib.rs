@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod cli;
 pub mod names;
 pub mod prime;

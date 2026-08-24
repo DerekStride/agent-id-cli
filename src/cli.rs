@@ -1,3 +1,5 @@
+use crate::activity::ActivityStateValue;
+
 use clap::{Args, Command, CommandFactory, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -89,12 +91,20 @@ pub struct AnnotateArgs {
     pub session_id: Option<String>,
 
     /// Set the concise current-work summary
-    #[arg(long, value_name = "TEXT", required_unless_present = "clear_summary")]
+    #[arg(long, value_name = "TEXT", conflicts_with = "clear_summary")]
     pub summary: Option<String>,
 
     /// Remove the current-work summary
     #[arg(long, conflicts_with = "summary")]
     pub clear_summary: bool,
+
+    /// Set the activity state
+    #[arg(long, value_name = "VALUE", conflicts_with = "clear_state")]
+    pub state: Option<ActivityStateValue>,
+
+    /// Remove the activity state
+    #[arg(long, conflicts_with = "state")]
+    pub clear_state: bool,
 
     /// Print the complete assignment as JSON
     #[arg(long)]
