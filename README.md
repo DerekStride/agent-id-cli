@@ -25,7 +25,7 @@ cargo install agent-id-cli
 Install the binary first, then install the OMP extension from this repository:
 
 ```bash
-omp plugin install https://github.com/DerekStride/agent-id-cli/
+omp plugin install https://github.com/DerekStride/agent-id-cli
 ```
 
 The extension invokes `agent-id` from `PATH` to register and update the active session identity.
