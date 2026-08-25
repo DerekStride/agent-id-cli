@@ -348,7 +348,7 @@ fn lookup_fails_before_registration() {
 }
 
 #[test]
-fn prime_json_contains_the_command_contract() {
+fn prime_json_contains_the_agent_workflow_and_command_contract() {
     let root = TempDir::new().unwrap();
     let output = command(&root).args(["prime", "--json"]).output().unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -358,6 +358,8 @@ fn prime_json_contains_the_command_contract() {
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
     assert!(documentation.contains("agent-id annotate"));
+    assert!(documentation.contains("Call the `agent_identity` tool without parameters"));
+    assert!(documentation.contains("agent-id discover"));
     assert!(documentation.contains("--state VALUE"));
     assert!(documentation.contains("stopped"));
 }

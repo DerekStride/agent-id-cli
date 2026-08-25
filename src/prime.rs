@@ -19,40 +19,45 @@ pub fn execute(args: &PrimeArgs) -> Result<()> {
 pub fn generate(prelude_only: bool) -> String {
     let prelude = r#"# agent-id — Portable agent identity registry
 
-Use `agent-id` to register and look up the permanent human-readable identity for a coding-agent session.
+Agent ID provides the permanent human-readable identity for a coding-agent session. The identity is keyed by the harness session ID; never invent a name or register a second name for the same session.
 
-The identity is keyed by the harness session ID. Do not invent a name or register a second name for the same session.
+## OMP workflow
 
-Session discovery, in order:
+The OMP extension automatically looks up or registers the current session, records its working directory, and manages its lifecycle state.
+
+Call the `agent_identity` tool without parameters to inspect the complete current assignment. The tool uses OMP's authoritative session ID, registers the identity if it is missing, and delegates to the `agent-id` binary. Do not call `agent-id register` or `agent-id lookup` merely to inspect your own identity when this tool is available.
+
+Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent_identity` to publish `waiting` or `blocked`, or to set or clear a summary when an explicit update is needed. Automatic summaries use completed agent turns; explicit tool updates remain authoritative.
+
+Call `agent-id discover` directly only when you need to find other identities. Results are newest first and include available summaries, lifecycle states, and working directories.
+
+## CLI fallback
+
+Direct CLI use is normally unnecessary under OMP. If the extension tool is unavailable, the CLI resolves a session from:
 
 1. An explicit `SESSION_ID` argument or `--session-id ID`.
 2. `AGENT_ID_SESSION_ID`.
-
-The realm is discovered from `--realm NAME`, `AGENT_REALM` (for tests/overrides), or `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as the fallback. If no realm configuration exists, one is automatically selected and saved to the realm file.
-
-The registry is durable and defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.
-
-When you need to understand the identity system or discover other agents, run `agent-id prime`. The extension provides this guidance once per session branch, including tree navigation, without repeating it on every prompt.
 
 A missing session ID is an error. A missing lookup is an error; register the session first.
 
 ## Examples
 
 ```bash
+agent-id discover
+agent-id discover --recent 24 --json
 agent-id register "$AGENT_ID_SESSION_ID"
 agent-id register --family Oak "$AGENT_ID_SESSION_ID"
 agent-id lookup "$AGENT_ID_SESSION_ID"
 agent-id annotate --summary "Implementing checkout retries" "$AGENT_ID_SESSION_ID"
 agent-id annotate --clear-summary "$AGENT_ID_SESSION_ID"
-agent-id annotate --state working "$AGENT_ID_SESSION_ID"
+agent-id annotate --state waiting "$AGENT_ID_SESSION_ID"
 agent-id annotate --state blocked "$AGENT_ID_SESSION_ID"
 agent-id annotate --clear-state "$AGENT_ID_SESSION_ID"
 agent-id annotate --cwd "$PWD" "$AGENT_ID_SESSION_ID"
 agent-id annotate --clear-cwd "$AGENT_ID_SESSION_ID"
-agent-id register --json --family Oak "$AGENT_ID_SESSION_ID"
 ```
 
-The default output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, optional timestamped summary, typed activity state, working directory, and created/updated timestamps."#;
+The default CLI output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, optional timestamped summary, typed activity state, working directory, and created/updated timestamps."#;
 
     if prelude_only {
         return prelude.to_string();

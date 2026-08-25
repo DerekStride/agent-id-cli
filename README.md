@@ -1,8 +1,10 @@
 # agent-id
 
-Portable identity registry for coding-agent sessions.
+Portable identity registry and OMP companion extension for coding-agent sessions.
 
 The `agent-id` binary assigns a permanent human-readable name to a stable session ID. The registry is durable, realm-aware, and independent of any particular agent harness.
+
+In OMP, the companion extension makes identity automatic: it registers sessions, tracks lifecycle state and working directory, and derives a concise current-work summary from completed agent turns.
 
 The Rust crate is named `agent-id-cli`; the installed binary remains `agent-id`.
 
@@ -28,87 +30,31 @@ Install the binary first, then install the OMP extension from this repository:
 omp plugin install https://github.com/DerekStride/agent-id-cli
 ```
 
-The extension invokes `agent-id` from `PATH` to register and update the active session identity.
+Once installed, the extension handles the normal identity workflow automatically.
 
 ## Usage
 
-Register a session:
-
-```bash
-agent-id register SESSION_ID --family Oak --realm Darkwood
-```
-
-Look up an existing identity by session ID, canonical name, or slug:
-
-```bash
-agent-id lookup SESSION_ID
-agent-id lookup "Spring Oak of Darkwood"
-agent-id lookup spring-oak-darkwood
-```
-
-Set or clear a concise current-work summary without changing the identity:
-
-```bash
-agent-id annotate SESSION_ID --summary "Implementing checkout retries"
-agent-id annotate SESSION_ID --clear-summary
-```
-
-Set or clear a typed activity state independently of the summary:
-
-```bash
-agent-id annotate SESSION_ID --state working
-agent-id annotate SESSION_ID --state blocked
-agent-id annotate SESSION_ID --clear-state
-```
-
-Set or clear the current working directory independently of summary and state:
-
-```bash
-agent-id annotate SESSION_ID --cwd /work/agent-id
-agent-id annotate SESSION_ID --clear-cwd
-```
-
-Without an explicit identifier, lookup and annotate use `AGENT_ID_SESSION_ID`. Use `--json` for machine-readable assignment records, including the optional timestamped summary, state, and working directory. Use `agent-id prime` for the complete agent-facing workflow documentation.
-
-List recent identities sorted by `updated_at`:
+With the OMP plugin, each session receives a stable identity and current lifecycle information without manual setup. Inspect recent identities from a terminal:
 
 ```bash
 agent-id discover
-agent-id discover --limit 20
-agent-id discover --recent 24 --realm Darkwood --json
+agent-id discover --recent 24
+agent-id lookup "Spring Oak of Darkwood"
 ```
 
-Human-readable discovery includes summaries, activity states, and working directories when present. JSON discovery always includes the nullable `summary`, `state`, and `cwd` fields.
+Discovery shows available summaries, activity states, and working directories so a human operator can see which sessions exist and what they are doing.
 
-Prune old assignments by default, or preview with `--dry-run`:
+For standalone use without OMP, register a harness session ID once and look it up later:
 
 ```bash
-agent-id prune --before 2026-08-01T00:00:00Z
-agent-id prune --before 2026-08-01T00:00:00Z --dry-run --json
+agent-id register SESSION_ID
+agent-id lookup SESSION_ID
 ```
 
-## Registry
+Run `agent-id --help` or `agent-id <command> --help` for all commands and options.
 
-The registry defaults to `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset. Set `AGENT_ID_HOME` for tests or an isolated registry.
+## Origin and companion project
 
-Session records are stored as `by-session/<session-id>.json`; session IDs must be filename-safe. Optional current-work summaries, typed activity states, and working directories are stored with the assignment and update independently of its permanent name.
+`agent-id` is based on Josh Beckman's [design for coordinating dozens of coding agents](https://gist.github.com/joshbeckman/d21dbd6c566470e4d012392fd3cb8ed8). It carries forward the central identity decisions from that work: externally assigned human-readable names keyed to stable harness session IDs, machine realms that partition allocation, and durable lookup independent of model self-report. This project extracts the identity registry and OMP lifecycle integration; mail, workspaces, and other coordination concerns remain separate.
 
-Registration resolves the realm from `--realm`, `AGENT_REALM` (for tests/overrides), or `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as the fallback. If missing, a realm is automatically chosen and saved to the realm file for all future sessions on the machine.
-
-The optional `extensions/agent-id.ts` adapter registers an OMP tool named `agent_identity`. The tool reads the authoritative session ID and working directory from the extension context, looks up or registers the assignment with explicit CLI arguments, and returns the complete JSON record. Pass `summary` or `state` to publish activity metadata, or `clear_summary: true` / `clear_state: true` to remove either field. Lifecycle hooks also persist `ctx.cwd` as working-directory metadata. Install or link the extension into the OMP extension directory.
-
-On session start, switch, branch, and tree navigation, the extension inserts one hidden persistent context message per branch: `Use agent-id prime when you need to understand Agent ID or discover other agents.` It checks the stable message type before inserting, so resumed sessions reuse the same prompt prefix instead of repeatedly spending cache tokens.
-
-The extension also fills the summary in on its own. After each of the first three completed agent turns it runs one bounded completion against the `@tiny` model role (falling back to `@smol`), sending only the previous summary, the latest request, and the latest reply. The generated phrase is capped at 80 characters and written through `agent-id annotate`, so the main conversation, system prompt, and prompt cache are untouched. Generation state is persisted as a session entry, survives resume and branching, and stops after three successful updates; explicit `agent_identity` calls remain authoritative afterwards. When no tiny model is authenticated, automatic summaries are skipped and identity registration continues unaffected.
-
-Activity states are `working` (processing a turn), `idle` (running and available), `waiting` (awaiting an external event), `blocked` (needs intervention), and `stopped` (shutdown recorded). State timestamps are generated by Agent ID; stale processes remain distinguishable by the age of `state.updated_at`.
-
-Working-directory metadata is an optional host-provided path. It is not used for identity allocation and is not inferred from prompt text; stale directories remain visible until explicitly updated or cleared.
-
-## Attribution
-
-The identity-and-mail coordination model was inspired by Josh Beckman's `agent-mail` script:
-
-<https://github.com/joshbeckman/dotfiles/blob/master/bin/agent-mail>
-
-`agent-id` is an independent Rust implementation of the identity registry portion of that system. Mailbox transport remains a separate concern handled by `agent-mail`.
+[AgentMail](https://github.com/DerekStride/agent-mail) extracts the Maildir messaging portion of Josh's design into its own crate. It integrates directly with `agent-id` for human-readable addressing while keeping mailbox delivery and read state separate from identity.
