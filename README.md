@@ -6,6 +6,30 @@ The `agent-id` binary assigns a permanent human-readable name to a stable sessio
 
 The Rust crate is named `agent-id-cli`; the installed binary remains `agent-id`.
 
+## Installation
+
+### Homebrew
+
+```bash
+brew install derekstride/tap/agent-id-cli
+```
+
+### Cargo
+
+```bash
+cargo install agent-id-cli
+```
+
+### OMP plugin
+
+Install the binary first, then install the OMP extension from this repository:
+
+```bash
+omp plugin install https://github.com/DerekStride/agent-id-cli/
+```
+
+The extension invokes `agent-id` from `PATH` to register and update the active session identity.
+
 ## Usage
 
 Register a session:
