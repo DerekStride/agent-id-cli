@@ -30,6 +30,8 @@ pub struct ActivityUpdate {
     pub clear_summary: bool,
     pub state: Option<ActivityStateValue>,
     pub clear_state: bool,
+    pub cwd: Option<String>,
+    pub clear_cwd: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +47,8 @@ pub struct Assignment {
     pub summary: Option<ActivitySummary>,
     #[serde(default)]
     pub state: Option<ActivityState>,
+    #[serde(default)]
+    pub cwd: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -155,6 +159,7 @@ impl Registry {
                 family_name,
                 realm: realm.clone(),
                 state: None,
+                cwd: None,
                 summary: None,
                 created_at: now,
                 updated_at: now,
@@ -219,6 +224,8 @@ impl Registry {
             && !update.clear_summary
             && update.state.is_none()
             && !update.clear_state
+            && update.cwd.is_none()
+            && !update.clear_cwd
         {
             bail!("pass at least one activity update");
         }
@@ -228,6 +235,9 @@ impl Registry {
         if update.state.is_some() && update.clear_state {
             bail!("state and clear_state are mutually exclusive");
         }
+        if update.cwd.is_some() && update.clear_cwd {
+            bail!("cwd and clear_cwd are mutually exclusive");
+        }
 
         let mut assignment = self.lookup_session(&session_id)?;
         let summary = update
@@ -235,6 +245,7 @@ impl Registry {
             .as_deref()
             .map(normalize_summary)
             .transpose()?;
+        let cwd = update.cwd.as_deref().map(normalize_cwd).transpose()?;
         let now = Utc::now();
         if update.summary.is_some() {
             assignment.summary = summary.map(|text| ActivitySummary {
@@ -251,6 +262,11 @@ impl Registry {
             });
         } else if update.clear_state {
             assignment.state = None;
+        }
+        if update.cwd.is_some() {
+            assignment.cwd = cwd;
+        } else if update.clear_cwd {
+            assignment.cwd = None;
         }
         assignment.updated_at = now;
         replace_assignment(&self.session_path(&session_id), &assignment)?;
@@ -418,6 +434,8 @@ pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
         clear_summary: args.clear_summary,
         state: args.state,
         clear_state: args.clear_state,
+        cwd: args.cwd.clone(),
+        clear_cwd: args.clear_cwd,
     };
     let assignment = Registry::from_env()?.annotate(&session_id, update)?;
     print_assignment(&assignment, args.json)
@@ -438,6 +456,9 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
             }
             if let Some(summary) = assignment.summary.as_ref() {
                 annotations.push(format!("summary:{}", summary.text));
+            }
+            if let Some(cwd) = assignment.cwd.as_ref() {
+                annotations.push(format!("cwd:{cwd}"));
             }
             if annotations.is_empty() {
                 println!("{}\t{}", assignment.name, assignment.session_id);
@@ -806,6 +827,19 @@ fn normalize_summary(value: &str) -> Result<String> {
     Ok(normalized)
 }
 
+const MAX_CWD_CHARS: usize = 4096;
+
+fn normalize_cwd(value: &str) -> Result<String> {
+    let value = require_nonempty(value, "working directory")?;
+    if value.chars().any(char::is_control) {
+        bail!("working directory cannot contain control characters");
+    }
+    if value.chars().count() > MAX_CWD_CHARS {
+        bail!("working directory must be at most {MAX_CWD_CHARS} characters");
+    }
+    Ok(value)
+}
+
 fn require_nonempty(value: &str, kind: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -911,6 +945,13 @@ mod tests {
         for handle in handles {
             assert_eq!(handle.join().unwrap(), first);
         }
+    }
+
+    #[test]
+    fn cwd_metadata_is_bounded_and_single_line() {
+        assert_eq!(normalize_cwd("  /tmp/agent-id  ").unwrap(), "/tmp/agent-id");
+        assert!(normalize_cwd("/tmp/agent\nid").is_err());
+        assert!(normalize_cwd(&"x".repeat(MAX_CWD_CHARS + 1)).is_err());
     }
 
     #[test]

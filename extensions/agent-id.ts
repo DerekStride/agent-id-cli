@@ -24,6 +24,7 @@ type ContextMessage = {
 type SummaryModel = { provider: string; id: string; baseUrl?: string };
 
 type SessionContext = {
+  cwd: string;
   sessionManager: {
     getSessionId(): string | undefined;
     getBranch(): SessionEntryLike[];
@@ -61,6 +62,8 @@ type ActivityUpdate = {
   clear_summary?: boolean;
   state?: ActivityStateValue;
   clear_state?: boolean;
+  cwd?: string;
+  clear_cwd?: boolean;
 };
 
 type ActivityState = {
@@ -126,6 +129,7 @@ type Assignment = {
   realm: string;
   summary?: { text: string; updated_at: string } | null;
   state?: ActivityState | null;
+  cwd?: string | null;
 };
 
 type IdentityResult = {
@@ -202,6 +206,12 @@ function annotateIdentity(
   if (update.clear_state) {
     args.push("--clear-state");
   }
+  if (update.cwd !== undefined) {
+    args.push("--cwd", update.cwd);
+  }
+  if (update.clear_cwd) {
+    args.push("--clear-cwd");
+  }
   const output = runAgentId(args);
   return { output, assignment: parseAssignment(output), registered: false };
 }
@@ -239,12 +249,18 @@ function exportIdentity(assignment: Assignment): void {
   process.env.AGENT_ID_REALM = assignment.realm;
 }
 
-function updateActivityState(context: SessionContext, value: ActivityStateValue): void {
+function updateActivityState(
+  context: SessionContext,
+  value: ActivityStateValue,
+): void {
   const sessionId = context.sessionManager.getSessionId();
   if (!sessionId) return;
   try {
     ensureIdentity(sessionId);
-    const result = annotateIdentity(sessionId, { state: value });
+    const result = annotateIdentity(sessionId, {
+      state: value,
+      cwd: context.cwd,
+    });
     exportIdentity(result.assignment);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -705,6 +721,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
             clear_summary: clearSummary,
             state: params.state,
             clear_state: clearState,
+            cwd: context.cwd,
           });
           result = { ...annotated, registered: result.registered };
         }

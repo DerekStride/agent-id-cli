@@ -106,6 +106,14 @@ pub struct AnnotateArgs {
     #[arg(long, conflicts_with = "state")]
     pub clear_state: bool,
 
+    /// Set the current working directory
+    #[arg(long, value_name = "PATH", conflicts_with = "clear_cwd")]
+    pub cwd: Option<String>,
+
+    /// Remove the current working directory
+    #[arg(long, conflicts_with = "cwd")]
+    pub clear_cwd: bool,
+
     /// Print the complete assignment as JSON
     #[arg(long)]
     pub json: bool,

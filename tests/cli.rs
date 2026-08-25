@@ -216,6 +216,70 @@ fn annotate_updates_state_independently_from_summary() {
 }
 
 #[test]
+fn annotate_updates_and_clears_cwd_metadata() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "cwd-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let registered: Assignment = serde_json::from_slice(&registered.stdout).unwrap();
+
+    let annotated = command(&root)
+        .args([
+            "annotate",
+            "cwd-session",
+            "--cwd",
+            "  /work/agent-id  ",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(annotated.status.success(), "{annotated:?}");
+    let annotated: Assignment = serde_json::from_slice(&annotated.stdout).unwrap();
+    assert_eq!(annotated.cwd.as_deref(), Some("/work/agent-id"));
+    assert_eq!(annotated.name, registered.name);
+    assert_eq!(annotated.created_at, registered.created_at);
+
+    let human = command(&root).args(["discover"]).output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        format!(
+            "{}\t{}\tcwd:/work/agent-id\n",
+            annotated.name, annotated.session_id
+        )
+    );
+
+    let stateful = command(&root)
+        .args(["annotate", "cwd-session", "--state", "working", "--json"])
+        .output()
+        .unwrap();
+    assert!(stateful.status.success(), "{stateful:?}");
+    let stateful: Assignment = serde_json::from_slice(&stateful.stdout).unwrap();
+    assert_eq!(stateful.cwd.as_deref(), Some("/work/agent-id"));
+    assert_eq!(
+        stateful.state.as_ref().unwrap().value.to_string(),
+        "working"
+    );
+
+    let cleared = command(&root)
+        .args(["annotate", "cwd-session", "--clear-cwd", "--json"])
+        .output()
+        .unwrap();
+    assert!(cleared.status.success(), "{cleared:?}");
+    let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert_eq!(cleared.cwd, None);
+    assert_eq!(cleared.state.as_ref().unwrap().value.to_string(), "working");
+
+    let invalid = command(&root)
+        .args(["annotate", "cwd-session", "--cwd", "/work\nagent-id"])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+}
+
+#[test]
 fn register_returns_and_updates_an_existing_identity() {
     let root = TempDir::new().unwrap();
     let first = command(&root)

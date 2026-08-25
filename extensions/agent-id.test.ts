@@ -37,6 +37,7 @@ describe("identity context message", () => {
       display: boolean;
     }> = [];
     const context = {
+      cwd: "/tmp/context",
       sessionManager: {
         getSessionId: () => "context-session",
         getBranch: () => entries,
