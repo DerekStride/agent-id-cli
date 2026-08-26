@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import path from "node:path";
 
 type MessageContent = string | Array<{ type: string; text?: string }>;
 
@@ -27,6 +28,7 @@ type SessionContext = {
   cwd: string;
   sessionManager: {
     getSessionId(): string | undefined;
+    getSessionFile?(): string | undefined;
     getBranch(): SessionEntryLike[];
   };
   models: { resolve(spec: string): SummaryModel | undefined };
@@ -61,6 +63,7 @@ type ActivityUpdate = {
   clear_state?: boolean;
   cwd?: string;
   clear_cwd?: boolean;
+  extensions?: Record<string, unknown>;
 };
 
 type ActivityState = {
@@ -159,10 +162,10 @@ function registerIdentity(sessionId: string): IdentityResult {
   return { output, assignment: parseAssignment(output), registered: true };
 }
 
-function annotateIdentity(
+export function buildAnnotateArgs(
   sessionId: string,
   update: ActivityUpdate,
-): IdentityResult {
+): string[] {
   const args = ["annotate", "--session-id", sessionId, "--json"];
   if (update.summary !== undefined) {
     args.push("--summary", update.summary);
@@ -182,7 +185,17 @@ function annotateIdentity(
   if (update.clear_cwd) {
     args.push("--clear-cwd");
   }
-  const output = runAgentId(args);
+  for (const [owner, data] of Object.entries(update.extensions ?? {})) {
+    args.push("--extension", `${owner}=${JSON.stringify(data)}`);
+  }
+  return args;
+}
+
+function annotateIdentity(
+  sessionId: string,
+  update: ActivityUpdate,
+): IdentityResult {
+  const output = runAgentId(buildAnnotateArgs(sessionId, update));
   return { output, assignment: parseAssignment(output), registered: false };
 }
 
@@ -231,6 +244,24 @@ export function injectIdentityForCurrent(
   };
 }
 
+export function sessionFileExtension(
+  context: SessionContext,
+): Record<string, unknown> | undefined {
+  let sessionFile: string | undefined;
+  try {
+    sessionFile = context.sessionManager.getSessionFile?.();
+  } catch {
+    return;
+  }
+  if (
+    typeof sessionFile !== "string" ||
+    (!path.posix.isAbsolute(sessionFile) && !path.win32.isAbsolute(sessionFile))
+  ) {
+    return;
+  }
+  return { omp: { session_file: sessionFile } };
+}
+
 function updateActivityState(
   context: SessionContext,
   value: ActivityStateValue,
@@ -242,6 +273,7 @@ function updateActivityState(
     annotateIdentity(sessionId, {
       state: value,
       cwd: context.cwd,
+      extensions: sessionFileExtension(context),
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -255,6 +287,8 @@ function reportSession(context: SessionContext): void {
 
   try {
     ensureIdentity(sessionId);
+    const extensions = sessionFileExtension(context);
+    if (extensions) annotateIdentity(sessionId, { extensions });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to resolve the session identity: ${detail}`);
@@ -593,32 +627,29 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
-    reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_switch", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
-    reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_branch", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
-    reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_tree", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
+    reportSession(context);
     restoreSummarySession(context);
   });
   pi.on("agent_start", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
-    reportSession(context);
     updateActivityState(context, "working");
   });
   pi.on("session_shutdown", (_event, context) => {

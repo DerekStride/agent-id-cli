@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod cli;
+pub mod herdr;
 pub mod names;
 pub mod prime;
 pub mod registry;

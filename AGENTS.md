@@ -38,28 +38,30 @@ Reads the identity for `AGENT_ID_SESSION_ID` without registering a missing sessi
 
 ### `agent-id annotate [SESSION_ID]`
 
-Updates summary, lifecycle state, or working-directory metadata independently; omitted fields remain unchanged.
+Updates summary, lifecycle state, working-directory metadata, or namespaced extension metadata independently; omitted fields remain unchanged.
 
 ```text
---summary TEXT      Set a concise summary (maximum 240 characters)
---clear-summary     Remove the summary
---state VALUE       Set working, idle, waiting, blocked, or stopped
---clear-state       Remove the activity state
---cwd PATH          Set the current working directory
---clear-cwd         Remove the current working directory
---session-id ID     Provide the session ID explicitly
---json              Print the complete assignment as JSON
+--summary TEXT         Set a concise summary (maximum 240 characters)
+--clear-summary        Remove the summary
+--state VALUE          Set working, idle, waiting, blocked, or stopped
+--clear-state          Remove the activity state
+--cwd PATH             Set the current working directory
+--clear-cwd            Remove the current working directory
+--extension OWNER=JSON Set namespaced unstructured JSON metadata; repeatable
+--clear-extension NAME Remove one extension namespace; repeatable
+--session-id ID        Provide the session ID explicitly
+--json                 Print the complete assignment as JSON
 ```
 
 ### `agent-id discover`
 
-Lists assignments by `updated_at`, newest first. Human-readable results include available summaries, states, and working directories; JSON includes the complete assignments.
+Lists assignments by `updated_at`, newest first. Human-readable results include available summaries, states, and working directories; JSON includes the complete assignments. Inside Herdr, discover queries `herdr api snapshot` and adds a non-persistent `runtime` projection to assignments whose OMP session-file metadata exactly matches a live Herdr agent.
 
 ```text
 --limit N           Maximum records (default 20; zero means all)
 --recent HOURS      Only records updated within this many hours
 --realm NAME        Only records in this realm
---json              Print the complete assignments as JSON
+--json              Print the complete assignments and available runtime projections as JSON
 ```
 
 ### `agent-id prune`
@@ -82,8 +84,8 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 
 | OMP event | Extension behavior |
 |---|---|
-| Session start, switch, or branch | Looks up or registers the identity, records the working directory, and marks the session `idle`. |
-| Agent turn starts | Refreshes the identity and marks the session `working`. |
+| Session start, switch, or branch | Looks up or registers the identity, records the OMP session file and working directory, and marks the session `idle`. |
+| Agent turn starts | Refreshes the OMP session file and marks the session `working`. |
 | Agent turn ends | Marks the session `idle` and may refresh its current-work summary. |
 | Tool call | Injects `AGENT_ID_SESSION_ID` only into matching `agent-id current` invocations through OMP's Bash tool. |
 | Session shuts down | Marks the session `stopped`. |
@@ -100,8 +102,21 @@ Lifecycle states are `working`, `idle`, `waiting`, `blocked`, and `stopped`. Age
 
 The registry root is `$AGENT_ID_HOME` when set, otherwise `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset.
 
-Session records live at `by-session/<session-id>.json`; session IDs must be filename-safe. Name claims live under `by-name/`. The assignment stores the permanent name and slug, realm, optional timestamped summary and lifecycle state, optional working directory, and creation/update timestamps.
+Session records live at `by-session/<session-id>.json`; session IDs must be filename-safe. Name claims live under `by-name/`. The assignment stores the permanent name and slug, realm, optional timestamped activity fields, and optional timestamped extension-owned JSON metadata.
 
 Realm resolution order is `--realm`, `AGENT_REALM` for tests or overrides, then `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as fallback. If no configuration exists, registration selects a realm and persists it for future sessions on the machine.
 
-Summary, state, and working-directory fields update independently of the permanent name. Working directories are host-provided metadata, are never inferred from prompt text, and remain until updated or cleared.
+Summary, state, working-directory, and extension fields update independently of the permanent name. Extension owners are bounded lowercase namespaces; each update atomically replaces one owner's JSON value. The OMP extension writes its absolute session file under `extensions.omp`, which discover uses only as a correlation key for ephemeral Herdr data.
+
+## Release workflow
+
+When the user says “Let's do the release workflow,” drive the release through publication:
+
+1. Confirm the worktree contains only the intended release changes, the branch is `main`, and the `v<version>` tag does not already exist.
+2. Update the version in `Cargo.toml` and `package.json`, then run Cargo without `--locked` once to refresh the root `agent-id-cli` entry in `Cargo.lock`.
+3. Run `cargo fmt --all -- --check`, `cargo test --all --locked`, `bun test extensions/agent-id.test.ts`, and `cargo package --locked --allow-dirty`.
+4. Commit all release changes with a Conventional Commit message, the relevant `SQ-Task` trailer, and the required OMP/model co-author trailers.
+5. Push `main`, create and push the annotated `v<version>` tag, then publish a GitHub release for that existing tag with generated notes. A tag push runs only the version check; publishing the GitHub release triggers macOS artifacts, crates.io publishing, and the Homebrew tap update.
+6. Watch the release-triggered `Publish` workflow until every required job succeeds. Verify the GitHub release has both macOS archives and checksums; report whether crates.io and the Homebrew tap published successfully.
+
+Required repository secrets are `CARGO_REGISTRY_TOKEN` and `HOMEBREW_TAP_TOKEN`.

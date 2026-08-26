@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     fs::{self, File},
     io::Write,
@@ -24,6 +25,12 @@ pub struct ActivitySummary {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExtensionMetadata {
+    pub data: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ActivityUpdate {
     pub summary: Option<String>,
@@ -32,6 +39,8 @@ pub struct ActivityUpdate {
     pub clear_state: bool,
     pub cwd: Option<String>,
     pub clear_cwd: bool,
+    pub extensions: BTreeMap<String, serde_json::Value>,
+    pub clear_extensions: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,6 +58,8 @@ pub struct Assignment {
     pub state: Option<ActivityState>,
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, ExtensionMetadata>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -161,6 +172,7 @@ impl Registry {
                 state: None,
                 cwd: None,
                 summary: None,
+                extensions: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
             };
@@ -226,6 +238,8 @@ impl Registry {
             && !update.clear_state
             && update.cwd.is_none()
             && !update.clear_cwd
+            && update.extensions.is_empty()
+            && update.clear_extensions.is_empty()
         {
             bail!("pass at least one activity update");
         }
@@ -237,6 +251,13 @@ impl Registry {
         }
         if update.cwd.is_some() && update.clear_cwd {
             bail!("cwd and clear_cwd are mutually exclusive");
+        }
+        if let Some(owner) = update
+            .extensions
+            .keys()
+            .find(|owner| update.clear_extensions.contains(*owner))
+        {
+            bail!("extension {owner} cannot be set and cleared together");
         }
 
         let mut assignment = self.lookup_session(&session_id)?;
@@ -267,6 +288,18 @@ impl Registry {
             assignment.cwd = cwd;
         } else if update.clear_cwd {
             assignment.cwd = None;
+        }
+        for (owner, data) in update.extensions {
+            assignment.extensions.insert(
+                owner,
+                ExtensionMetadata {
+                    data,
+                    updated_at: now,
+                },
+            );
+        }
+        for owner in update.clear_extensions {
+            assignment.extensions.remove(&owner);
         }
         assignment.updated_at = now;
         replace_assignment(&self.session_path(&session_id), &assignment)?;
@@ -442,6 +475,8 @@ pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
         clear_state: args.clear_state,
         cwd: args.cwd.clone(),
         clear_cwd: args.clear_cwd,
+        extensions: parse_extension_updates(&args.extensions)?,
+        clear_extensions: parse_extension_owners(&args.clear_extensions)?,
     };
     let assignment = Registry::from_env()?.annotate(&session_id, update)?;
     print_assignment(&assignment, args.json)
@@ -450,12 +485,14 @@ pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
 pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
     let assignments =
         Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref())?;
+    let records = crate::herdr::augment_discovery(assignments);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&assignments)?);
-    } else if assignments.is_empty() {
+        println!("{}", serde_json::to_string_pretty(&records)?);
+    } else if records.is_empty() {
         println!("(no identities)");
     } else {
-        for assignment in assignments {
+        for record in records {
+            let assignment = &record.assignment;
             let mut annotations = Vec::new();
             if let Some(state) = assignment.state.as_ref() {
                 annotations.push(format!("state:{}", state.value));
@@ -465,6 +502,18 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
             }
             if let Some(cwd) = assignment.cwd.as_ref() {
                 annotations.push(format!("cwd:{cwd}"));
+            }
+            if let Some(runtime) = record.runtime {
+                for location in runtime.locations {
+                    let workspace = location
+                        .workspace_label
+                        .as_deref()
+                        .unwrap_or(&location.workspace_id);
+                    annotations.push(format!(
+                        "herdr:{} pane:{} workspace:{}",
+                        location.agent_status, location.pane_id, workspace
+                    ));
+                }
             }
             if annotations.is_empty() {
                 println!("{}\t{}", assignment.name, assignment.session_id);
@@ -812,6 +861,55 @@ fn validate_session_id(value: &str) -> Result<String> {
         bail!("session ID must be a filename-safe value using letters, digits, '.', '_' or '-'");
     }
     Ok(value)
+}
+
+const MAX_EXTENSION_OWNER_CHARS: usize = 64;
+const MAX_EXTENSION_JSON_BYTES: usize = 16 * 1024;
+
+fn parse_extension_updates(values: &[String]) -> Result<BTreeMap<String, serde_json::Value>> {
+    let mut extensions = BTreeMap::new();
+    for value in values {
+        let (owner, json) = value
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--extension must use OWNER=JSON"))?;
+        let owner = normalize_extension_owner(owner)?;
+        if json.len() > MAX_EXTENSION_JSON_BYTES {
+            bail!("extension {owner} JSON must be at most {MAX_EXTENSION_JSON_BYTES} bytes");
+        }
+        let data = serde_json::from_str(json)
+            .with_context(|| format!("parse JSON for extension {owner}"))?;
+        if extensions.insert(owner.clone(), data).is_some() {
+            bail!("extension {owner} was provided more than once");
+        }
+    }
+    Ok(extensions)
+}
+
+fn parse_extension_owners(values: &[String]) -> Result<BTreeSet<String>> {
+    values
+        .iter()
+        .map(|owner| normalize_extension_owner(owner))
+        .collect()
+}
+
+fn normalize_extension_owner(value: &str) -> Result<String> {
+    let owner = require_nonempty(value, "extension owner")?;
+    let valid = owner.chars().count() <= MAX_EXTENSION_OWNER_CHARS
+        && owner
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        && owner.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        });
+    if !valid {
+        bail!(
+            "extension owner must be at most {MAX_EXTENSION_OWNER_CHARS} characters using lowercase letters, digits, '.', '_' or '-'"
+        );
+    }
+    Ok(owner)
 }
 
 const MAX_SUMMARY_CHARS: usize = 240;

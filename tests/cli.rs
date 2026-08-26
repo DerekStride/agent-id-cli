@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[cfg(unix)]
+use std::{fs, os::unix::fs::PermissionsExt};
+
 use agent_id_cli::registry::Assignment;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -12,8 +15,19 @@ fn command(root: &TempDir) -> Command {
         .env_remove("AGENT_ID_SESSION_ID")
         .env_remove("AGENT_SESSION_ID")
         .env_remove("OMP_SESSION_ID")
-        .env_remove("PI_SESSION_ID");
+        .env_remove("PI_SESSION_ID")
+        .env_remove("HERDR_ENV")
+        .env_remove("HERDR_SOCKET_PATH")
+        .env_remove("HERDR_BIN_PATH");
     command
+}
+
+#[cfg(unix)]
+fn executable(path: &std::path::Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
 
 #[test]
@@ -280,6 +294,72 @@ fn annotate_updates_and_clears_cwd_metadata() {
 }
 
 #[test]
+fn annotate_updates_and_clears_namespaced_extension_metadata() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "extension-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+
+    let annotated = command(&root)
+        .args([
+            "annotate",
+            "extension-session",
+            "--extension",
+            r#"omp={"session_file":"/tmp/extension-session.jsonl"}"#,
+            "--extension",
+            "counter=42",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(annotated.status.success(), "{annotated:?}");
+    let annotated: Assignment = serde_json::from_slice(&annotated.stdout).unwrap();
+    assert_eq!(
+        annotated.extensions["omp"].data["session_file"],
+        "/tmp/extension-session.jsonl"
+    );
+    assert_eq!(annotated.extensions["counter"].data, 42);
+
+    let cleared = command(&root)
+        .args([
+            "annotate",
+            "extension-session",
+            "--clear-extension",
+            "counter",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(cleared.status.success(), "{cleared:?}");
+    let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
+    assert!(!cleared.extensions.contains_key("counter"));
+    assert!(cleared.extensions.contains_key("omp"));
+
+    for extension in ["Missing={}", "missing-json", "omp={"] {
+        let invalid = command(&root)
+            .args(["annotate", "extension-session", "--extension", extension])
+            .output()
+            .unwrap();
+        assert!(!invalid.status.success(), "{extension}: {invalid:?}");
+    }
+
+    let conflicting = command(&root)
+        .args([
+            "annotate",
+            "extension-session",
+            "--extension",
+            "omp={}",
+            "--clear-extension",
+            "omp",
+        ])
+        .output()
+        .unwrap();
+    assert!(!conflicting.status.success(), "{conflicting:?}");
+}
+
+#[test]
 fn register_returns_and_updates_an_existing_identity() {
     let root = TempDir::new().unwrap();
     let first = command(&root)
@@ -392,6 +472,8 @@ fn prime_json_contains_the_agent_workflow_and_command_contract() {
     assert!(documentation.contains("agent-id current --json"));
     assert!(documentation.contains("agent-id discover"));
     assert!(documentation.contains("--state VALUE"));
+    assert!(documentation.contains("--extension OWNER=JSON"));
+    assert!(documentation.contains("Inside Herdr"));
     assert!(documentation.contains("stopped"));
 }
 
@@ -423,6 +505,88 @@ fn discover_lists_recent_assignments() {
     let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(assignments.len(), 2);
     assert!(assignments[0].updated_at >= assignments[1].updated_at);
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_overlays_matching_herdr_runtime_without_persisting_it() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "runtime-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let annotated = command(&root)
+        .args([
+            "annotate",
+            "runtime-session",
+            "--extension",
+            r#"omp={"session_file":"/tmp/runtime-session.jsonl"}"#,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(annotated.status.success(), "{annotated:?}");
+
+    let herdr = root.path().join("fake-herdr");
+    executable(
+        &herdr,
+        r#"#!/bin/sh
+cat <<'JSON'
+{"id":"test","result":{"snapshot":{"agents":[{"agent":"omp","agent_session":{"agent":"omp","kind":"path","source":"herdr:omp","value":"/tmp/runtime-session.jsonl"},"agent_status":"working","cwd":"/work/agent-id","foreground_cwd":"/work/agent-id","pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"}],"tabs":[{"tab_id":"w1:t1","label":"agents"}],"workspaces":[{"workspace_id":"w1","label":"agent-id","worktree":{"repo_key":"repo","repo_name":"agent-id","repo_root":"/work/agent-id","checkout_path":"/work/agent-id","is_linked_worktree":false}}]}}}
+JSON
+"#,
+    );
+
+    let mut discover = command(&root);
+    discover
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &herdr);
+    let output = discover.args(["discover", "--json"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let records: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let runtime = &records[0]["runtime"];
+    assert_eq!(runtime["provider"], "herdr");
+    assert_eq!(runtime["locations"][0]["agent_status"], "working");
+    assert_eq!(runtime["locations"][0]["pane_id"], "w1:p1");
+    assert_eq!(runtime["locations"][0]["workspace_label"], "agent-id");
+    assert_eq!(
+        runtime["locations"][0]["worktree"]["checkout_path"],
+        "/work/agent-id"
+    );
+
+    let mut human = command(&root);
+    human
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &herdr);
+    let human = human.args(["discover"]).output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("herdr:working pane:w1:p1 workspace:agent-id"));
+
+    let lookup = command(&root)
+        .args(["lookup", "runtime-session", "--json"])
+        .output()
+        .unwrap();
+    assert!(lookup.status.success(), "{lookup:?}");
+    let assignment: Value = serde_json::from_slice(&lookup.stdout).unwrap();
+    assert!(assignment.get("runtime").is_none());
+
+    executable(&herdr, "#!/bin/sh\nprintf 'unavailable\\n' >&2\nexit 1\n");
+    let mut degraded = command(&root);
+    degraded
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &herdr);
+    let degraded = degraded.args(["discover", "--json"]).output().unwrap();
+    assert!(degraded.status.success(), "{degraded:?}");
+    let records: Value = serde_json::from_slice(&degraded.stdout).unwrap();
+    assert!(records[0].get("runtime").is_none());
+    assert!(String::from_utf8(degraded.stderr)
+        .unwrap()
+        .contains("unable to enrich discover from Herdr"));
 }
 
 #[test]

@@ -9,12 +9,14 @@ import agentIdExtension, {
   CONTEXT_MESSAGE_CONTENT,
   CONTEXT_MESSAGE_TYPE,
   branchHasContextMessage,
+  buildAnnotateArgs,
   buildSummaryInput,
   ensureContextMessage,
   injectIdentityForCurrent,
   latestExchange,
   normalizeAutoSummary,
   restoreAutoSummaryState,
+  sessionFileExtension,
   shouldSummarize,
 } from "./agent-id";
 
@@ -66,6 +68,65 @@ describe("identity context message", () => {
     expect(branchHasContextMessage(entries)).toBe(true);
 
     expect(CONTEXT_MESSAGE_CONTENT).toContain("agent-id current --json");
+  });
+});
+
+describe("OMP session metadata", () => {
+  test("reports an absolute session file through the omp namespace", () => {
+    const context = {
+      cwd: "/tmp/context",
+      sessionManager: {
+        getSessionId: () => "context-session",
+        getSessionFile: () => "/tmp/sessions/context-session.jsonl",
+        getBranch: () => [],
+      },
+      models: { resolve: () => undefined },
+      modelRegistry: { resolver: () => undefined },
+    };
+
+    const extensions = sessionFileExtension(context);
+    expect(extensions).toEqual({
+      omp: { session_file: "/tmp/sessions/context-session.jsonl" },
+    });
+    expect(
+      buildAnnotateArgs("context-session", {
+        state: "working",
+        cwd: "/tmp/context",
+        extensions,
+      }),
+    ).toEqual([
+      "annotate",
+      "--session-id",
+      "context-session",
+      "--json",
+      "--state",
+      "working",
+      "--cwd",
+      "/tmp/context",
+      "--extension",
+      'omp={\"session_file\":\"/tmp/sessions/context-session.jsonl\"}',
+    ]);
+  });
+
+  test("ignores missing, relative, and failing session files", () => {
+    const context = {
+      cwd: "/tmp/context",
+      sessionManager: {
+        getSessionId: () => "context-session",
+        getSessionFile: () => undefined as string | undefined,
+        getBranch: () => [],
+      },
+      models: { resolve: () => undefined },
+      modelRegistry: { resolver: () => undefined },
+    };
+
+    expect(sessionFileExtension(context)).toBeUndefined();
+    context.sessionManager.getSessionFile = () => "relative/session.jsonl";
+    expect(sessionFileExtension(context)).toBeUndefined();
+    context.sessionManager.getSessionFile = () => {
+      throw new Error("unavailable");
+    };
+    expect(sessionFileExtension(context)).toBeUndefined();
   });
 });
 

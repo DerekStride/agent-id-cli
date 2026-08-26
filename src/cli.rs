@@ -123,6 +123,14 @@ pub struct AnnotateArgs {
     #[arg(long, conflicts_with = "cwd")]
     pub clear_cwd: bool,
 
+    /// Set namespaced extension metadata from OWNER=JSON
+    #[arg(long = "extension", value_name = "OWNER=JSON")]
+    pub extensions: Vec<String>,
+
+    /// Remove one namespaced extension metadata value
+    #[arg(long = "clear-extension", value_name = "OWNER")]
+    pub clear_extensions: Vec<String>,
+
     /// Print the complete assignment as JSON
     #[arg(long)]
     pub json: bool,
