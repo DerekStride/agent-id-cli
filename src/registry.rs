@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     activity::{ActivityState, ActivityStateValue},
-    cli::{AnnotateArgs, DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
+    cli::{AnnotateArgs, CurrentArgs, DiscoverArgs, LookupArgs, PruneArgs, RegisterArgs},
     names,
 };
 
@@ -424,6 +424,12 @@ pub fn execute_register(args: &RegisterArgs) -> Result<()> {
 pub fn execute_lookup(args: &LookupArgs) -> Result<()> {
     let input = resolve_session(args.explicit_input())?;
     let assignment = Registry::from_env()?.lookup(&input)?;
+    print_assignment(&assignment, args.json)
+}
+
+pub fn execute_current(args: &CurrentArgs) -> Result<()> {
+    let session_id = resolve_session(None)?;
+    let assignment = Registry::from_env()?.lookup(&session_id)?;
     print_assignment(&assignment, args.json)
 }
 

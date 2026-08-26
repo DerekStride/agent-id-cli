@@ -320,6 +320,37 @@ fn commands_discover_session_id_from_environment() {
 }
 
 #[test]
+fn current_reads_the_session_id_from_environment() {
+    let root = TempDir::new().unwrap();
+    let mut register = command(&root);
+    register.env("AGENT_ID_SESSION_ID", "current-session");
+    let registered = register
+        .args(["register", "--family", "Oak", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+    let registered: Assignment = serde_json::from_slice(&registered.stdout).unwrap();
+
+    let mut current = command(&root);
+    current.env("AGENT_ID_SESSION_ID", "current-session");
+    let output = current.args(["current", "--json"]).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let assignment: Assignment = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(assignment, registered);
+}
+
+#[test]
+fn current_fails_without_a_session_environment() {
+    let root = TempDir::new().unwrap();
+    let output = command(&root).args(["current"]).output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("no session ID found"));
+}
+
+#[test]
 fn legacy_session_environment_names_are_ignored() {
     let root = TempDir::new().unwrap();
     for (key, value) in [
@@ -358,7 +389,7 @@ fn prime_json_contains_the_agent_workflow_and_command_contract() {
     assert!(documentation.contains("agent-id register"));
     assert!(documentation.contains("agent-id lookup"));
     assert!(documentation.contains("agent-id annotate"));
-    assert!(documentation.contains("Call the `agent_identity` tool without parameters"));
+    assert!(documentation.contains("agent-id current --json"));
     assert!(documentation.contains("agent-id discover"));
     assert!(documentation.contains("--state VALUE"));
     assert!(documentation.contains("stopped"));

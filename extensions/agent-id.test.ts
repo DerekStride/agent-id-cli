@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import {
+import agentIdExtension, {
   ACTIVITY_STATE_VALUES,
+  AGENT_ID_CURRENT_COMMAND,
   AUTO_SUMMARY_ENTRY_TYPE,
   AUTO_SUMMARY_LIMIT,
   AUTO_SUMMARY_MAX_CHARS,
@@ -10,6 +11,7 @@ import {
   branchHasContextMessage,
   buildSummaryInput,
   ensureContextMessage,
+  injectIdentityForCurrent,
   latestExchange,
   normalizeAutoSummary,
   restoreAutoSummaryState,
@@ -62,6 +64,129 @@ describe("identity context message", () => {
       },
     ]);
     expect(branchHasContextMessage(entries)).toBe(true);
+
+    expect(CONTEXT_MESSAGE_CONTENT).toContain("agent-id current --json");
+  });
+});
+
+describe("agent-id current command pattern", () => {
+  test("matches various current invocations", () => {
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id current")).toBe(true);
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id current --json")).toBe(true);
+    expect(
+      AGENT_ID_CURRENT_COMMAND.test("/usr/local/bin/agent-id current --json"),
+    ).toBe(true);
+    expect(
+      AGENT_ID_CURRENT_COMMAND.test("FOO=bar agent-id current --json"),
+    ).toBe(true);
+    expect(
+      AGENT_ID_CURRENT_COMMAND.test("echo ok && agent-id current --json"),
+    ).toBe(true);
+    expect(
+      AGENT_ID_CURRENT_COMMAND.test("agent-id current | jq .session_id"),
+    ).toBe(true);
+  });
+
+  test("does not match unrelated commands", () => {
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id lookup session-1")).toBe(
+      false,
+    );
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id register --json")).toBe(
+      false,
+    );
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id discover")).toBe(false);
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-id prime")).toBe(false);
+    expect(
+      AGENT_ID_CURRENT_COMMAND.test("agent-id annotate --state working"),
+    ).toBe(false);
+    expect(AGENT_ID_CURRENT_COMMAND.test("git status")).toBe(false);
+    expect(AGENT_ID_CURRENT_COMMAND.test("agent-mail scan")).toBe(false);
+  });
+});
+
+describe("tool-call session injection", () => {
+  test("injects AGENT_ID_SESSION_ID only for matching agent-id current calls", () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, context: unknown) => unknown
+    >();
+    const pi = {
+      on(event: string, handler: (event: unknown, context: unknown) => unknown) {
+        handlers.set(event, handler);
+      },
+      appendEntry() {},
+      sendMessage() {},
+    };
+    agentIdExtension(pi as Parameters<typeof agentIdExtension>[0]);
+
+    const toolCall = handlers.get("tool_call");
+    expect(toolCall).toBeDefined();
+
+    const context = {
+      cwd: "/tmp/context",
+      sessionManager: {
+        getSessionId: () => "session-xyz",
+        getBranch: () => [],
+      },
+      models: { resolve: () => undefined },
+      modelRegistry: { resolver: () => undefined },
+    };
+
+    const injected = toolCall?.(
+      {
+        toolName: "bash",
+        input: { command: "agent-id current --json", env: { FOO: "bar" } },
+      },
+      context,
+    );
+    expect(injected).toEqual({
+      input: {
+        command: "agent-id current --json",
+        env: {
+          AGENT_ID_SESSION_ID: "session-xyz",
+          FOO: "bar",
+        },
+      },
+    });
+
+    const callerOverride = toolCall?.(
+      {
+        toolName: "bash",
+        input: {
+          command: "agent-id current --json",
+          env: { AGENT_ID_SESSION_ID: "explicit-session" },
+        },
+      },
+      context,
+    );
+    expect(callerOverride).toEqual({
+      input: {
+        command: "agent-id current --json",
+        env: {
+          AGENT_ID_SESSION_ID: "explicit-session",
+        },
+      },
+    });
+
+    expect(
+      toolCall?.(
+        {
+          toolName: "bash",
+          input: { command: "agent-id lookup other-session --json" },
+        },
+        context,
+      ),
+    ).toBeUndefined();
+
+    expect(
+      toolCall?.(
+        {
+          toolName: "read",
+          input: { path: "src/lib.rs" },
+        },
+        context,
+      ),
+    ).toBeUndefined();
   });
 });
 

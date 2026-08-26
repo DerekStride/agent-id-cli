@@ -20,6 +20,8 @@ pub enum Commands {
     Register(RegisterArgs),
     /// Look up the identity already registered for a session
     Lookup(LookupArgs),
+    /// Look up the identity for AGENT_ID_SESSION_ID
+    Current(CurrentArgs),
     /// Set or clear the current-work summary for a registered session
     Annotate(AnnotateArgs),
     /// List recent identity assignments
@@ -28,6 +30,13 @@ pub enum Commands {
     Prune(PruneArgs),
     /// Output the agent-facing identity workflow manual
     Prime(PrimeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CurrentArgs {
+    /// Print the complete assignment as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

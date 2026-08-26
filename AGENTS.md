@@ -28,6 +28,14 @@ Reads an existing identity by session ID, canonical name, or slug. Without an ex
 --json              Print the complete assignment as JSON
 ```
 
+### `agent-id current`
+
+Reads the identity for `AGENT_ID_SESSION_ID` without registering a missing session. Use `--json` to print the complete assignment.
+
+```text
+--json              Print the complete assignment as JSON
+```
+
 ### `agent-id annotate [SESSION_ID]`
 
 Updates summary, lifecycle state, or working-directory metadata independently; omitted fields remain unchanged.
@@ -70,18 +78,19 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 
 ## OMP extension implementation
 
-`extensions/agent-id.ts` is the companion adapter. It reads the authoritative session ID and working directory from OMP, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and exports its identity fields as `AGENT_ID_*` environment variables.
+`extensions/agent-id.ts` is the companion adapter. It reads the authoritative session ID and working directory from OMP, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and manages session lifecycle and summaries.
 
 | OMP event | Extension behavior |
 |---|---|
-| Session start, switch, or branch | Looks up or registers the identity, exports its environment, records the working directory, and marks the session `idle`. |
+| Session start, switch, or branch | Looks up or registers the identity, records the working directory, and marks the session `idle`. |
 | Agent turn starts | Refreshes the identity and marks the session `working`. |
 | Agent turn ends | Marks the session `idle` and may refresh its current-work summary. |
+| Tool call | Injects `AGENT_ID_SESSION_ID` only into matching `agent-id current` invocations through OMP's Bash tool. |
 | Session shuts down | Marks the session `stopped`. |
 
-On session start, switch, branch, and tree navigation, the extension inserts one hidden persistent context message per branch pointing agents to `agent-id prime`. It checks the stable message type before insertion so resumed branches reuse the existing prompt prefix.
+On session start, switch, branch, and tree navigation, the extension inserts one hidden persistent context message per branch pointing agents to `agent-id prime` and `agent-id current --json`. It checks the stable message type before insertion so resumed branches reuse the existing prompt prefix.
 
-The extension registers the essential `agent_identity` tool. With no update parameters, the tool looks up or registers the current session and returns the complete assignment. `summary`, `clear_summary`, `state`, and `clear_state` update activity metadata; the extension always supplies the host session ID and working directory before delegating to the CLI.
+The extension does not register an identity tool. For matching `agent-id current` invocations through OMP's Bash tool, the extension injects the current session ID as `AGENT_ID_SESSION_ID`. It preserves a caller-provided value and does not modify the parent shell or unrelated Bash commands.
 
 After completed turns, the extension can derive up to three successful summaries. Each completion receives only the previous summary, latest request, and latest reply; it uses the `@tiny` model role with `@smol` as fallback, caps output at 80 characters, and persists through `agent-id annotate`. Summary generation state is stored as a session entry and restored across resume, branch, and tree navigation. Missing model access does not prevent registration or lifecycle updates.
 

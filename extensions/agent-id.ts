@@ -39,16 +39,13 @@ type AgentEndEvent = {
   willContinue?: boolean;
 };
 
-type ToolResult = {
-  content: [{ type: "text"; text: string }];
-  details?: {
-    session_id: string;
-    registered: boolean;
-    summary_updated?: boolean;
-    state_updated?: boolean;
-  };
-  isError?: boolean;
+export type ToolCallEvent = {
+  toolName: string;
+  input: Record<string, unknown>;
 };
+
+export const AGENT_ID_CURRENT_COMMAND =
+  /(?:^|[;&|`$()]\s*)(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*)(?:\S*\/)?agent-id\s+(?:--[A-Za-z0-9_-]+(?:=(?:"[^"]*"|'[^']*'|\S+))?\s+|-[A-Za-z0-9]\s+)*current(?=\s|$)/;
 export const ACTIVITY_STATE_VALUES = [
   "working",
   "idle",
@@ -71,12 +68,6 @@ type ActivityState = {
   updated_at: string;
 };
 
-type ToolParameter = {
-  type: "string" | "boolean";
-  description: string;
-  enum?: readonly string[];
-};
-
 type ExtensionAPI = {
   on(
     event:
@@ -92,6 +83,10 @@ type ExtensionAPI = {
     handler: (event: unknown, context: SessionContext) => void,
   ): void;
   on(
+    event: "tool_call",
+    handler: (event: unknown, context: SessionContext) => unknown,
+  ): void;
+  on(
     event: "agent_end",
     handler: (event: AgentEndEvent, context: SessionContext) => Promise<void>,
   ): void;
@@ -100,24 +95,6 @@ type ExtensionAPI = {
     message: ContextMessage,
     options?: { deliverAs: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void;
-  registerTool(tool: {
-    name: string;
-    label: string;
-    description: string;
-    loadMode?: "essential";
-    parameters: {
-      type: "object";
-      properties: Record<string, ToolParameter>;
-      additionalProperties: false;
-    };
-    execute(
-      id: string,
-      params: ActivityUpdate,
-      signal: AbortSignal,
-      onUpdate: unknown,
-      context: SessionContext,
-    ): Promise<ToolResult>;
-  }): void;
 };
 
 type Assignment = {
@@ -138,14 +115,7 @@ type IdentityResult = {
   registered: boolean;
 };
 
-const IDENTITY_ENV_KEYS = [
-  "AGENT_ID_SESSION_ID",
-  "AGENT_ID_NAME",
-  "AGENT_ID_SLUG",
-  "AGENT_ID_FIRST_NAME",
-  "AGENT_ID_FAMILY_NAME",
-  "AGENT_ID_REALM",
-] as const;
+let currentSessionId: string | undefined;
 
 function requiredString(value: Record<string, unknown>, key: string): string {
   const result = value[key];
@@ -236,17 +206,29 @@ function ensureIdentity(sessionId: string): IdentityResult {
   }
 }
 
-function clearIdentityEnvironment(): void {
-  for (const key of IDENTITY_ENV_KEYS) delete process.env[key];
-}
+export function injectIdentityForCurrent(
+  event: unknown,
+  context?: SessionContext,
+): { input: Record<string, unknown> } | undefined {
+  const sessionId = context?.sessionManager?.getSessionId?.() ?? currentSessionId;
+  if (!sessionId || typeof event !== "object" || event === null) return;
+  const toolEvent = event as Partial<ToolCallEvent>;
+  if (toolEvent.toolName !== "bash" || !toolEvent.input) return;
 
-function exportIdentity(assignment: Assignment): void {
-  process.env.AGENT_ID_SESSION_ID = assignment.session_id;
-  process.env.AGENT_ID_NAME = assignment.name;
-  process.env.AGENT_ID_SLUG = assignment.slug;
-  process.env.AGENT_ID_FIRST_NAME = assignment.first_name;
-  process.env.AGENT_ID_FAMILY_NAME = assignment.family_name;
-  process.env.AGENT_ID_REALM = assignment.realm;
+  const command = toolEvent.input.command;
+  if (typeof command !== "string" || !AGENT_ID_CURRENT_COMMAND.test(command)) return;
+
+  const existingEnv = toolEvent.input.env;
+  const callerEnv =
+    typeof existingEnv === "object" && existingEnv !== null && !Array.isArray(existingEnv)
+      ? (existingEnv as Record<string, unknown>)
+      : {};
+  return {
+    input: {
+      ...toolEvent.input,
+      env: { AGENT_ID_SESSION_ID: sessionId, ...callerEnv },
+    },
+  };
 }
 
 function updateActivityState(
@@ -257,11 +239,10 @@ function updateActivityState(
   if (!sessionId) return;
   try {
     ensureIdentity(sessionId);
-    const result = annotateIdentity(sessionId, {
+    annotateIdentity(sessionId, {
       state: value,
       cwd: context.cwd,
     });
-    exportIdentity(result.assignment);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to update the activity state: ${detail}`);
@@ -269,13 +250,11 @@ function updateActivityState(
 }
 
 function reportSession(context: SessionContext): void {
-  clearIdentityEnvironment();
   const sessionId = context.sessionManager.getSessionId();
   if (!sessionId) return;
 
   try {
-    const result = ensureIdentity(sessionId);
-    exportIdentity(result.assignment);
+    ensureIdentity(sessionId);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to resolve the session identity: ${detail}`);
@@ -284,7 +263,7 @@ function reportSession(context: SessionContext): void {
 
 export const CONTEXT_MESSAGE_TYPE = "dev.derekstride.agent-id.context-v1";
 export const CONTEXT_MESSAGE_CONTENT =
-  "Use `agent-id prime` when you need to understand Agent ID or discover other agents.";
+  "Use `agent-id prime` to understand Agent ID or discover other agents. Use `agent-id current --json` to inspect your current identity.";
 
 export function branchHasContextMessage(
   entries: readonly SessionEntryLike[],
@@ -590,7 +569,7 @@ async function maintainAutoSummary(
 
     ensureIdentity(sessionId);
     if (session.epoch !== epoch || controller.signal.aborted) return;
-    exportIdentity(annotateIdentity(sessionId, { summary }).assignment);
+    annotateIdentity(sessionId, { summary });
 
     const state: AutoSummaryState = {
       version: 1,
@@ -610,33 +589,40 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("session_before_switch", (_event, context) => abortSummarySession(context));
   pi.on("session_before_branch", (_event, context) => abortSummarySession(context));
   pi.on("session_before_tree", (_event, context) => abortSummarySession(context));
+  pi.on("tool_call", (event, context) => injectIdentityForCurrent(event, context));
   pi.on("session_start", (_event, context) => {
+    currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
     reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_switch", (_event, context) => {
+    currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
     reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_branch", (_event, context) => {
+    currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
     reportSession(context);
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_tree", (_event, context) => {
+    currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
     restoreSummarySession(context);
   });
   pi.on("agent_start", (_event, context) => {
+    currentSessionId = context.sessionManager.getSessionId();
     reportSession(context);
     updateActivityState(context, "working");
   });
   pi.on("session_shutdown", (_event, context) => {
+    currentSessionId = undefined;
     updateActivityState(context, "stopped");
     for (const session of summarySessions.values()) session.abort.abort();
     summarySessions.clear();
@@ -663,85 +649,5 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
       );
     });
     await session.queue;
-  });
-  pi.registerTool({
-    name: "agent_identity",
-    label: "Agent Identity",
-    description:
-      "Look up or register the current agent session identity, optionally update its summary or activity state, and return the complete assignment.",
-    loadMode: "essential",
-    parameters: {
-      type: "object",
-      properties: {
-        summary: {
-          type: "string",
-          description: "Concise summary of the agent's current work.",
-        },
-        clear_summary: {
-          type: "boolean",
-          description: "Remove the current-work summary when true.",
-        },
-        state: {
-          type: "string",
-          enum: ACTIVITY_STATE_VALUES,
-          description: "Set the current activity state.",
-        },
-        clear_state: {
-          type: "boolean",
-          description: "Remove the current activity state when true.",
-        },
-      },
-      additionalProperties: false,
-    },
-    async execute(_id, params, _signal, _onUpdate, context) {
-      const sessionId = context.sessionManager.getSessionId();
-      if (!sessionId) {
-        return {
-          content: [{ type: "text", text: "agent-id: no active session ID" }],
-          isError: true,
-        };
-      }
-
-      try {
-        const clearSummary = params.clear_summary === true;
-        const clearState = params.clear_state === true;
-        if (params.summary !== undefined && clearSummary) {
-          throw new Error("summary and clear_summary are mutually exclusive");
-        }
-        if (params.state !== undefined && clearState) {
-          throw new Error("state and clear_state are mutually exclusive");
-        }
-
-        let result = ensureIdentity(sessionId);
-        const summaryUpdated = params.summary !== undefined || clearSummary;
-        const stateUpdated = params.state !== undefined || clearState;
-        if (summaryUpdated || stateUpdated) {
-          const annotated = annotateIdentity(sessionId, {
-            summary: params.summary,
-            clear_summary: clearSummary,
-            state: params.state,
-            clear_state: clearState,
-            cwd: context.cwd,
-          });
-          result = { ...annotated, registered: result.registered };
-        }
-        exportIdentity(result.assignment);
-        return {
-          content: [{ type: "text", text: result.output.trim() }],
-          details: {
-            session_id: sessionId,
-            registered: result.registered,
-            summary_updated: summaryUpdated,
-            state_updated: stateUpdated,
-          },
-        };
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text", text: `agent-id: ${detail}` }],
-          isError: true,
-        };
-      }
-    },
   });
 }
