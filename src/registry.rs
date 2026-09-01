@@ -311,6 +311,7 @@ impl Registry {
         limit: usize,
         recent_hours: Option<i64>,
         realm: Option<&str>,
+        include_stopped: bool,
     ) -> Result<Vec<Assignment>> {
         if recent_hours.is_some_and(|hours| hours < 0) {
             bail!("--recent must be non-negative");
@@ -336,6 +337,14 @@ impl Registry {
             if realm
                 .as_deref()
                 .is_some_and(|value| value != assignment.realm)
+            {
+                continue;
+            }
+            if !include_stopped
+                && assignment
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.value == ActivityStateValue::Stopped)
             {
                 continue;
             }
@@ -484,7 +493,7 @@ pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
 
 pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
     let assignments =
-        Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref())?;
+        Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref(), args.all)?;
     let records = crate::herdr::augment_discovery(assignments);
     if args.json {
         println!("{}", serde_json::to_string_pretty(&records)?);

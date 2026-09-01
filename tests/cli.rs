@@ -471,6 +471,7 @@ fn prime_json_contains_the_agent_workflow_and_command_contract() {
     assert!(documentation.contains("agent-id annotate"));
     assert!(documentation.contains("agent-id current --json"));
     assert!(documentation.contains("agent-id discover"));
+    assert!(documentation.contains("--all"));
     assert!(documentation.contains("--state VALUE"));
     assert!(documentation.contains("--extension OWNER=JSON"));
     assert!(documentation.contains("Inside Herdr"));
@@ -505,6 +506,71 @@ fn discover_lists_recent_assignments() {
     let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(assignments.len(), 2);
     assert!(assignments[0].updated_at >= assignments[1].updated_at);
+}
+
+#[test]
+fn discover_excludes_only_stopped_assignments_by_default() {
+    let root = TempDir::new().unwrap();
+    for session_id in [
+        "unset-session",
+        "working-session",
+        "idle-session",
+        "waiting-session",
+        "blocked-session",
+        "stopped-session",
+    ] {
+        let output = command(&root)
+            .args(["register", session_id])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    for (session_id, state) in [
+        ("working-session", "working"),
+        ("idle-session", "idle"),
+        ("waiting-session", "waiting"),
+        ("blocked-session", "blocked"),
+        ("stopped-session", "stopped"),
+    ] {
+        let output = command(&root)
+            .args(["annotate", session_id, "--state", state])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    let output = command(&root)
+        .args(["discover", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
+    let mut session_ids: Vec<_> = assignments
+        .iter()
+        .map(|assignment| assignment.session_id.as_str())
+        .collect();
+    session_ids.sort_unstable();
+    assert_eq!(
+        session_ids,
+        vec![
+            "blocked-session",
+            "idle-session",
+            "unset-session",
+            "waiting-session",
+            "working-session",
+        ]
+    );
+
+    let output = command(&root)
+        .args(["discover", "--all", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let assignments: Vec<Assignment> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(assignments.len(), 6);
+    assert!(assignments
+        .iter()
+        .any(|assignment| assignment.session_id == "stopped-session"));
 }
 
 #[cfg(unix)]

@@ -55,12 +55,13 @@ Updates summary, lifecycle state, working-directory metadata, or namespaced exte
 
 ### `agent-id discover`
 
-Lists assignments by `updated_at`, newest first. Human-readable results include available summaries, states, and working directories; JSON includes the complete assignments. Inside Herdr, discover queries `herdr api snapshot` and adds a non-persistent `runtime` projection to assignments whose OMP session-file metadata exactly matches a live Herdr agent.
+Lists non-stopped assignments by `updated_at`, newest first. Use `--all` to include stopped assignments. Human-readable results include available summaries, states, and working directories; JSON includes the complete assignments. Inside Herdr, discover queries `herdr api snapshot` and adds a non-persistent `runtime` projection to assignments whose OMP session-file metadata exactly matches a live Herdr agent.
 
 ```text
 --limit N           Maximum records (default 20; zero means all)
 --recent HOURS      Only records updated within this many hours
 --realm NAME        Only records in this realm
+--all              Include stopped assignments
 --json              Print the complete assignments and available runtime projections as JSON
 ```
 

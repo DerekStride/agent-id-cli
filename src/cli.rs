@@ -24,7 +24,7 @@ pub enum Commands {
     Current(CurrentArgs),
     /// Set or clear the current-work summary for a registered session
     Annotate(AnnotateArgs),
-    /// List recent identity assignments
+    /// List identity assignments; stopped assignments are hidden by default
     Discover(DiscoverArgs),
     /// Remove identity assignments older than a cutoff
     Prune(PruneArgs),
@@ -155,6 +155,10 @@ pub struct DiscoverArgs {
     /// Only include records in this realm
     #[arg(long, value_name = "NAME")]
     pub realm: Option<String>,
+
+    /// Include stopped assignments
+    #[arg(long)]
+    pub all: bool,
 
     /// Print the complete assignments as JSON
     #[arg(long)]

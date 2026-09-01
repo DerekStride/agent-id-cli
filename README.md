@@ -39,10 +39,11 @@ With the OMP plugin, each session receives a stable identity and current lifecyc
 ```bash
 agent-id discover
 agent-id discover --recent 24
+agent-id discover --all
 agent-id lookup "Spring Oak of Darkwood"
 ```
 
-Discovery shows available summaries, activity states, and working directories so a human operator can see which sessions exist and what they are doing.
+Discovery shows non-stopped sessions by default, including available summaries, activity states, and working directories. Use `--all` to include stopped sessions from the registry.
 
 For standalone use without OMP, register a harness session ID once and look it up later:
 
