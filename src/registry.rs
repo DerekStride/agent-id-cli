@@ -52,11 +52,8 @@ pub struct Assignment {
     pub first_name: String,
     pub family_name: String,
     pub realm: String,
-    #[serde(default)]
     pub summary: Option<ActivitySummary>,
-    #[serde(default)]
-    pub state: Option<ActivityState>,
-    #[serde(default)]
+    pub state: ActivityState,
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, ExtensionMetadata>,
@@ -169,7 +166,7 @@ impl Registry {
                 first_name,
                 family_name,
                 realm: realm.clone(),
-                state: None,
+                state: ActivityState::unknown(now),
                 cwd: None,
                 summary: None,
                 extensions: BTreeMap::new(),
@@ -276,14 +273,6 @@ impl Registry {
         } else if update.clear_summary {
             assignment.summary = None;
         }
-        if let Some(value) = update.state {
-            assignment.state = Some(ActivityState {
-                value,
-                updated_at: now,
-            });
-        } else if update.clear_state {
-            assignment.state = None;
-        }
         if update.cwd.is_some() {
             assignment.cwd = cwd;
         } else if update.clear_cwd {
@@ -301,17 +290,22 @@ impl Registry {
         for owner in update.clear_extensions {
             assignment.extensions.remove(&owner);
         }
+        if let Some(value) = update.state {
+            set_omp_activity_state(&mut assignment.extensions, value, now);
+        } else if update.clear_state {
+            clear_omp_activity_state(&mut assignment.extensions, now);
+        }
+        normalize_omp_activity_state(&mut assignment.extensions, now);
         assignment.updated_at = now;
+        assignment.state = materialize_omp_activity_state(&assignment.extensions, now);
         replace_assignment(&self.session_path(&session_id), &assignment)?;
         Ok(assignment)
     }
 
     pub fn discover(
         &self,
-        limit: usize,
         recent_hours: Option<i64>,
         realm: Option<&str>,
-        include_stopped: bool,
     ) -> Result<Vec<Assignment>> {
         if recent_hours.is_some_and(|hours| hours < 0) {
             bail!("--recent must be non-negative");
@@ -340,23 +334,12 @@ impl Registry {
             {
                 continue;
             }
-            if !include_stopped
-                && assignment
-                    .state
-                    .as_ref()
-                    .is_some_and(|state| state.value == ActivityStateValue::Stopped)
-            {
-                continue;
-            }
             if cutoff.is_some_and(|value| assignment.updated_at < value) {
                 continue;
             }
             assignments.push(assignment);
         }
         assignments.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        if limit > 0 {
-            assignments.truncate(limit);
-        }
         Ok(assignments)
     }
 
@@ -492,9 +475,14 @@ pub fn execute_annotate(args: &AnnotateArgs) -> Result<()> {
 }
 
 pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
-    let assignments =
-        Registry::from_env()?.discover(args.limit, args.recent, args.realm.as_deref(), args.all)?;
-    let records = crate::herdr::augment_discovery(assignments);
+    let assignments = Registry::from_env()?.discover(args.recent, args.realm.as_deref())?;
+    let mut records = crate::herdr::augment_discovery(assignments);
+    if !args.all {
+        records.retain(|record| record.assignment.state.value != ActivityStateValue::Stopped);
+    }
+    if args.limit > 0 {
+        records.truncate(args.limit);
+    }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&records)?);
     } else if records.is_empty() {
@@ -503,9 +491,7 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
         for record in records {
             let assignment = &record.assignment;
             let mut annotations = Vec::new();
-            if let Some(state) = assignment.state.as_ref() {
-                annotations.push(format!("state:{}", state.value));
-            }
+            annotations.push(format!("state:{}", assignment.state.value));
             if let Some(summary) = assignment.summary.as_ref() {
                 annotations.push(format!("summary:{}", summary.text));
             }
@@ -524,16 +510,12 @@ pub fn execute_discover(args: &DiscoverArgs) -> Result<()> {
                     ));
                 }
             }
-            if annotations.is_empty() {
-                println!("{}\t{}", assignment.name, assignment.session_id);
-            } else {
-                println!(
-                    "{}\t{}\t{}",
-                    assignment.name,
-                    assignment.session_id,
-                    annotations.join("\t")
-                );
-            }
+            println!(
+                "{}\t{}\t{}",
+                assignment.name,
+                assignment.session_id,
+                annotations.join("\t")
+            );
         }
     }
     Ok(())
@@ -763,12 +745,104 @@ fn claim_name(path: &Path, session_id: &str) -> Result<Claim> {
     Ok(claim)
 }
 
+#[derive(Debug, Serialize)]
+struct PersistedAssignment<'a> {
+    version: u8,
+    session_id: &'a str,
+    name: &'a str,
+    slug: &'a str,
+    first_name: &'a str,
+    family_name: &'a str,
+    realm: &'a str,
+    summary: &'a Option<ActivitySummary>,
+    cwd: &'a Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    extensions: &'a BTreeMap<String, ExtensionMetadata>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+fn persisted_assignment(assignment: &Assignment) -> PersistedAssignment<'_> {
+    PersistedAssignment {
+        version: assignment.version,
+        session_id: &assignment.session_id,
+        name: &assignment.name,
+        slug: &assignment.slug,
+        first_name: &assignment.first_name,
+        family_name: &assignment.family_name,
+        realm: &assignment.realm,
+        summary: &assignment.summary,
+        cwd: &assignment.cwd,
+        extensions: &assignment.extensions,
+        created_at: assignment.created_at,
+        updated_at: assignment.updated_at,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAssignment {
+    version: u8,
+    session_id: String,
+    name: String,
+    slug: String,
+    first_name: String,
+    family_name: String,
+    realm: String,
+    #[serde(default)]
+    summary: Option<ActivitySummary>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    extensions: BTreeMap<String, ExtensionMetadata>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl StoredAssignment {
+    fn into_assignment(self) -> Assignment {
+        let StoredAssignment {
+            version,
+            session_id,
+            name,
+            slug,
+            first_name,
+            family_name,
+            realm,
+            summary,
+            cwd,
+            extensions,
+            created_at,
+            updated_at,
+        } = self;
+        let state = materialize_omp_activity_state(&extensions, updated_at);
+        Assignment {
+            version,
+            session_id,
+            name,
+            slug,
+            first_name,
+            family_name,
+            realm,
+            summary,
+            state,
+            cwd,
+            extensions,
+            created_at,
+            updated_at,
+        }
+    }
+}
+
 fn write_assignment(path: &Path, assignment: &Assignment) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("assignment has no parent directory"))?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let contents = format!("{}\n", serde_json::to_string_pretty(assignment)?);
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&persisted_assignment(assignment))?
+    );
     let temp = temporary_path(path);
     let mut file = File::create(&temp)
         .with_context(|| format!("create temporary assignment {}", temp.display()))?;
@@ -794,7 +868,10 @@ fn replace_assignment(path: &Path, assignment: &Assignment) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("assignment has no parent directory"))?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let contents = format!("{}\n", serde_json::to_string_pretty(assignment)?);
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&persisted_assignment(assignment))?
+    );
     let temp = temporary_path(path);
     let mut file = File::create(&temp)
         .with_context(|| format!("create temporary assignment {}", temp.display()))?;
@@ -811,7 +888,80 @@ fn replace_assignment(path: &Path, assignment: &Assignment) -> Result<()> {
 
 fn read_assignment(path: &Path) -> Result<Assignment> {
     let contents = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&contents)?)
+    Ok(serde_json::from_str::<StoredAssignment>(&contents)?.into_assignment())
+}
+const OMP_EXTENSION_OWNER: &str = "omp";
+const OMP_STATE_KEY: &str = "state";
+
+fn omp_activity_state(extensions: &BTreeMap<String, ExtensionMetadata>) -> Option<ActivityState> {
+    let metadata = extensions.get(OMP_EXTENSION_OWNER)?;
+    let state = metadata.data.get(OMP_STATE_KEY)?;
+    if let Some(value) = state.as_str() {
+        return Some(ActivityState::from_external(value, metadata.updated_at));
+    }
+    serde_json::from_value(state.clone()).ok()
+}
+
+fn materialize_omp_activity_state(
+    extensions: &BTreeMap<String, ExtensionMetadata>,
+    fallback_updated_at: DateTime<Utc>,
+) -> ActivityState {
+    omp_activity_state(extensions).unwrap_or_else(|| ActivityState::unknown(fallback_updated_at))
+}
+
+fn set_omp_activity_state(
+    extensions: &mut BTreeMap<String, ExtensionMetadata>,
+    value: ActivityStateValue,
+    updated_at: DateTime<Utc>,
+) {
+    let metadata = extensions
+        .entry(OMP_EXTENSION_OWNER.to_string())
+        .or_insert_with(|| ExtensionMetadata {
+            data: serde_json::json!({}),
+            updated_at,
+        });
+    if !metadata.data.is_object() {
+        metadata.data = serde_json::json!({});
+    }
+    metadata
+        .data
+        .as_object_mut()
+        .expect("state extension data was just normalized to an object")
+        .insert(
+            OMP_STATE_KEY.to_string(),
+            serde_json::json!({
+                "value": value,
+                "updated_at": updated_at,
+            }),
+        );
+    metadata.updated_at = updated_at;
+}
+
+fn clear_omp_activity_state(
+    extensions: &mut BTreeMap<String, ExtensionMetadata>,
+    updated_at: DateTime<Utc>,
+) {
+    let Some(metadata) = extensions.get_mut(OMP_EXTENSION_OWNER) else {
+        return;
+    };
+    if let Some(data) = metadata.data.as_object_mut() {
+        data.remove(OMP_STATE_KEY);
+        metadata.updated_at = updated_at;
+    }
+}
+
+fn normalize_omp_activity_state(
+    extensions: &mut BTreeMap<String, ExtensionMetadata>,
+    updated_at: DateTime<Utc>,
+) {
+    let value = extensions
+        .get(OMP_EXTENSION_OWNER)
+        .and_then(|metadata| metadata.data.get(OMP_STATE_KEY))
+        .and_then(|state| state.as_str())
+        .map(ActivityStateValue::from_external);
+    if let Some(value) = value {
+        set_omp_activity_state(extensions, value, updated_at);
+    }
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);

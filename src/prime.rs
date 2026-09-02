@@ -23,11 +23,11 @@ Agent ID provides the permanent human-readable identity for a coding-agent sessi
 
 ## OMP workflow
 
-The OMP extension automatically looks up or registers the current session, records its working directory and session file, and manages its lifecycle state.
+The OMP extension automatically looks up or registers the current session, records its working directory and session file, and publishes its lifecycle signal under the `extensions.omp` namespace.
 
-Call `agent-id current --json` to inspect the complete current assignment. The command uses `AGENT_ID_SESSION_ID` and never registers a missing identity. Call `agent-id discover` directly when you need to find other identities. Discover omits only identities in the `stopped` state by default; use `agent-id discover --all` to include them. Inside Herdr, discover adds live pane, workspace, status, and worktree context when the reported OMP session file matches an assignment.
+Call `agent-id current --json` to inspect the complete current assignment. The command uses `AGENT_ID_SESSION_ID` and never registers a missing identity. Call `agent-id discover` directly when you need to find other identities. Discover omits materialized `stopped` identities by default; use `agent-id discover --all` to include them. Inside Herdr, discover adds live pane, workspace, status, and worktree context when the reported OMP session file matches an assignment.
 
-Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent-id annotate` to publish `waiting` or `blocked`, or to set or clear a summary or namespaced extension value when an explicit update is needed. Automatic summaries use completed agent turns; explicit updates remain authoritative.
+The top-level state is materialized from Herdr runtime state first, then the OMP lifecycle signal, and otherwise `unknown`. Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent-id annotate` to publish `waiting` or `blocked`, or to set or clear a summary or namespaced extension value when an explicit update is needed. Automatic summaries use completed agent turns; explicit updates remain authoritative.
 
 ## CLI fallback
 
@@ -56,7 +56,7 @@ agent-id annotate --cwd "$PWD" "$AGENT_ID_SESSION_ID"
 agent-id annotate --clear-cwd "$AGENT_ID_SESSION_ID"
 ```
 
-The default CLI output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, optional timestamped summary, typed activity state, working directory, and created/updated timestamps."#;
+The default CLI output is the full name. Use `--json` when a tool needs the session ID, name parts, realm, slug, optional timestamped summary, materialized state, working directory, and created/updated timestamps."#;
 
     if prelude_only {
         return prelude.to_string();

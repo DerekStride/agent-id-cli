@@ -38,13 +38,13 @@ Reads the identity for `AGENT_ID_SESSION_ID` without registering a missing sessi
 
 ### `agent-id annotate [SESSION_ID]`
 
-Updates summary, lifecycle state, working-directory metadata, or namespaced extension metadata independently; omitted fields remain unchanged.
+Updates summary, OMP lifecycle state, working-directory metadata, or namespaced extension metadata independently; omitted fields remain unchanged. The `--state` option writes the OMP signal under `extensions.omp`.
 
 ```text
 --summary TEXT         Set a concise summary (maximum 240 characters)
 --clear-summary        Remove the summary
---state VALUE          Set working, idle, waiting, blocked, or stopped
---clear-state          Remove the activity state
+--state VALUE          Set the OMP lifecycle state signal
+--clear-state          Remove the OMP lifecycle state signal
 --cwd PATH             Set the current working directory
 --clear-cwd            Remove the current working directory
 --extension OWNER=JSON Set namespaced unstructured JSON metadata; repeatable
@@ -55,7 +55,7 @@ Updates summary, lifecycle state, working-directory metadata, or namespaced exte
 
 ### `agent-id discover`
 
-Lists non-stopped assignments by `updated_at`, newest first. Use `--all` to include stopped assignments. Human-readable results include available summaries, states, and working directories; JSON includes the complete assignments. Inside Herdr, discover queries `herdr api snapshot` and adds a non-persistent `runtime` projection to assignments whose OMP session-file metadata exactly matches a live Herdr agent.
+Lists non-stopped assignments by `updated_at`, newest first. Use `--all` to include stopped assignments. The top-level state is materialized from Herdr runtime state first, then the OMP extension state, and otherwise `unknown`. Human-readable results include available summaries, materialized states, and working directories; JSON includes the complete assignments. Inside Herdr, discover queries `herdr api snapshot` and adds a non-persistent `runtime` projection with the Herdr state and locations for assignments whose OMP session-file metadata exactly matches a live Herdr agent.
 
 ```text
 --limit N           Maximum records (default 20; zero means all)
@@ -81,15 +81,15 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 
 ## OMP extension implementation
 
-`extensions/agent-id.ts` is the companion adapter. It reads the authoritative session ID and working directory from OMP, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and manages session lifecycle and summaries.
+`extensions/agent-id.ts` is the companion adapter. It reads the authoritative session ID and working directory from OMP, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and manages session lifecycle and summaries. OMP lifecycle signals are stored under the `extensions.omp` namespace.
 
 | OMP event | Extension behavior |
 |---|---|
-| Session start, switch, or branch | Looks up or registers the identity, records the OMP session file and working directory, and marks the session `idle`. |
-| Agent turn starts | Refreshes the OMP session file and marks the session `working`. |
-| Agent turn ends | Marks the session `idle` and may refresh its current-work summary. |
+| Session start, switch, branch, or tree navigation | Looks up or registers the identity, records the OMP session file and working directory, and publishes `idle` under `extensions.omp`. |
+| Agent turn starts | Refreshes the OMP session file and publishes `working` under `extensions.omp`. |
+| Agent turn ends | Publishes `idle` under `extensions.omp` and may refresh its current-work summary. |
 | Tool call | Injects `AGENT_ID_SESSION_ID` only into matching `agent-id current` invocations through OMP's Bash tool. |
-| Session shuts down | Marks the session `stopped`. |
+| Session shuts down | Publishes `stopped` under `extensions.omp`. |
 
 On session start, switch, branch, and tree navigation, the extension inserts one hidden persistent context message per branch pointing agents to `agent-id prime` and `agent-id current --json`. It checks the stable message type before insertion so resumed branches reuse the existing prompt prefix.
 
@@ -97,17 +97,17 @@ The extension does not register an identity tool. For matching `agent-id current
 
 After completed turns, the extension can derive up to three successful summaries. Each completion receives only the previous summary, latest request, and latest reply; it uses the `@tiny` model role with `@smol` as fallback, caps output at 80 characters, and persists through `agent-id annotate`. Summary generation state is stored as a session entry and restored across resume, branch, and tree navigation. Missing model access does not prevent registration or lifecycle updates.
 
-Lifecycle states are `working`, `idle`, `waiting`, `blocked`, and `stopped`. Agent ID generates state timestamps; stale sessions remain distinguishable by `state.updated_at`.
+Lifecycle signals are `working`, `idle`, `waiting`, `blocked`, and `stopped`; `unknown` is the materialized fallback when no signal is available. Agent ID generates signal timestamps. The top-level `state` is not persisted as a source field.
 
 ## Registry implementation
 
 The registry root is `$AGENT_ID_HOME` when set, otherwise `$XDG_DATA_HOME/agent-id`, or `$HOME/.local/share/agent-id` when `XDG_DATA_HOME` is unset.
 
-Session records live at `by-session/<session-id>.json`; session IDs must be filename-safe. Name claims live under `by-name/`. The assignment stores the permanent name and slug, realm, optional timestamped activity fields, and optional timestamped extension-owned JSON metadata.
+Session records live at `by-session/<session-id>.json`; session IDs must be filename-safe. Name claims live under `by-name/`. The assignment stores the permanent name and slug, realm, optional timestamped summary, working-directory metadata, and optional timestamped extension-owned JSON metadata. OMP lifecycle state is stored in `extensions.omp.data.state`.
 
 Realm resolution order is `--realm`, `AGENT_REALM` for tests or overrides, then `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as fallback. If no configuration exists, registration selects a realm and persists it for future sessions on the machine.
 
-Summary, state, working-directory, and extension fields update independently of the permanent name. Extension owners are bounded lowercase namespaces; each update atomically replaces one owner's JSON value. The OMP extension writes its absolute session file under `extensions.omp`, which discover uses only as a correlation key for ephemeral Herdr data.
+Summary, working-directory, and extension fields update independently of the permanent name. Extension owners are bounded lowercase namespaces; each update atomically replaces one owner's JSON value. The OMP extension writes its absolute session file and lifecycle state under `extensions.omp`; discover materializes the top-level state from the Herdr runtime projection when present, then the OMP signal, then `unknown`.
 
 ## Release workflow
 

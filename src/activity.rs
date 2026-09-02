@@ -12,6 +12,20 @@ pub enum ActivityStateValue {
     Waiting,
     Blocked,
     Stopped,
+    Unknown,
+}
+
+impl ActivityStateValue {
+    pub fn from_external(value: &str) -> Self {
+        match value {
+            "working" => Self::Working,
+            "idle" => Self::Idle,
+            "waiting" => Self::Waiting,
+            "blocked" => Self::Blocked,
+            "stopped" => Self::Stopped,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 impl fmt::Display for ActivityStateValue {
@@ -22,6 +36,7 @@ impl fmt::Display for ActivityStateValue {
             Self::Waiting => "waiting",
             Self::Blocked => "blocked",
             Self::Stopped => "stopped",
+            Self::Unknown => "unknown",
         };
         formatter.write_str(value)
     }
@@ -31,4 +46,20 @@ impl fmt::Display for ActivityStateValue {
 pub struct ActivityState {
     pub value: ActivityStateValue,
     pub updated_at: DateTime<Utc>,
+}
+
+impl ActivityState {
+    pub fn unknown(updated_at: DateTime<Utc>) -> Self {
+        Self {
+            value: ActivityStateValue::Unknown,
+            updated_at,
+        }
+    }
+
+    pub fn from_external(value: &str, updated_at: DateTime<Utc>) -> Self {
+        Self {
+            value: ActivityStateValue::from_external(value),
+            updated_at,
+        }
+    }
 }

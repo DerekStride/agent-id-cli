@@ -4,7 +4,7 @@ Portable identity registry and OMP companion extension for coding-agent sessions
 
 The `agent-id` binary assigns a permanent human-readable name to a stable session ID. The registry is durable, realm-aware, and independent of any particular agent harness.
 
-In OMP, the companion extension makes identity automatic: it registers sessions, tracks lifecycle state and working directory, and derives a concise current-work summary from completed agent turns.
+In OMP, the companion extension makes identity automatic: it registers sessions, records the OMP lifecycle signal, and derives a concise current-work summary from completed agent turns.
 
 The Rust crate is named `agent-id-cli`; the installed binary remains `agent-id`.
 
@@ -43,7 +43,7 @@ agent-id discover --all
 agent-id lookup "Spring Oak of Darkwood"
 ```
 
-Discovery shows non-stopped sessions by default, including available summaries, activity states, and working directories. Use `--all` to include stopped sessions from the registry.
+Discovery shows non-stopped sessions by default, including available summaries, materialized states, and working directories. Herdr state takes precedence when runtime information is available, followed by the OMP extension state, with `unknown` when neither signal exists. Use `--all` to include stopped sessions from the registry.
 
 For standalone use without OMP, register a harness session ID once and look it up later:
 

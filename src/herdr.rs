@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::activity::ActivityState;
 use crate::registry::Assignment;
 
 const OMP_EXTENSION_OWNER: &str = "omp";
@@ -19,6 +20,7 @@ pub struct DiscoveredAssignment {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuntimeProjection {
     pub provider: &'static str,
+    pub state: String,
     pub observed_at: DateTime<Utc>,
     pub locations: Vec<HerdrLocation>,
 }
@@ -229,7 +231,7 @@ fn join_snapshot(
     assignments
         .into_iter()
         .zip(locations)
-        .map(|(assignment, mut locations)| {
+        .map(|(mut assignment, mut locations)| {
             locations.sort_by(|left, right| {
                 (&left.workspace_id, &left.tab_id, &left.pane_id).cmp(&(
                     &right.workspace_id,
@@ -237,10 +239,15 @@ fn join_snapshot(
                     &right.pane_id,
                 ))
             });
-            let runtime = (!locations.is_empty()).then_some(RuntimeProjection {
-                provider: "herdr",
-                observed_at,
-                locations,
+            let runtime = (!locations.is_empty()).then(|| {
+                let state = locations[0].agent_status.clone();
+                assignment.state = ActivityState::from_external(&state, observed_at);
+                RuntimeProjection {
+                    provider: "herdr",
+                    state,
+                    observed_at,
+                    locations,
+                }
             });
             DiscoveredAssignment {
                 assignment,
@@ -290,7 +297,7 @@ mod tests {
             family_name: "Agent".to_string(),
             realm: "Test".to_string(),
             summary: None,
-            state: None,
+            state: ActivityState::unknown(now),
             cwd: None,
             extensions,
             created_at: now,
@@ -346,6 +353,9 @@ mod tests {
             records[0].runtime.as_ref().unwrap().locations[0].pane_id,
             "w1:p1"
         );
+        assert_eq!(records[0].runtime.as_ref().unwrap().state, "working");
+        assert_eq!(records[0].assignment.state.value.to_string(), "working");
+        assert_eq!(records[0].assignment.state.updated_at, now);
         assert_eq!(
             records[1].runtime.as_ref().unwrap().locations[0].pane_id,
             "w1:p2"

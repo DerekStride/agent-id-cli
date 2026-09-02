@@ -59,8 +59,6 @@ type ActivityStateValue = (typeof ACTIVITY_STATE_VALUES)[number];
 type ActivityUpdate = {
   summary?: string;
   clear_summary?: boolean;
-  state?: ActivityStateValue;
-  clear_state?: boolean;
   cwd?: string;
   clear_cwd?: boolean;
   extensions?: Record<string, unknown>;
@@ -173,12 +171,6 @@ export function buildAnnotateArgs(
   if (update.clear_summary) {
     args.push("--clear-summary");
   }
-  if (update.state !== undefined) {
-    args.push("--state", update.state);
-  }
-  if (update.clear_state) {
-    args.push("--clear-state");
-  }
   if (update.cwd !== undefined) {
     args.push("--cwd", update.cwd);
   }
@@ -246,20 +238,23 @@ export function injectIdentityForCurrent(
 
 export function sessionFileExtension(
   context: SessionContext,
+  state?: ActivityStateValue,
 ): Record<string, unknown> | undefined {
   let sessionFile: string | undefined;
   try {
     sessionFile = context.sessionManager.getSessionFile?.();
   } catch {
-    return;
+    sessionFile = undefined;
   }
+  const data: Record<string, string> = {};
   if (
-    typeof sessionFile !== "string" ||
-    (!path.posix.isAbsolute(sessionFile) && !path.win32.isAbsolute(sessionFile))
+    typeof sessionFile === "string" &&
+    (path.posix.isAbsolute(sessionFile) || path.win32.isAbsolute(sessionFile))
   ) {
-    return;
+    data.session_file = sessionFile;
   }
-  return { omp: { session_file: sessionFile } };
+  if (state !== undefined) data.state = state;
+  return Object.keys(data).length > 0 ? { omp: data } : undefined;
 }
 
 function updateActivityState(
@@ -271,9 +266,8 @@ function updateActivityState(
   try {
     ensureIdentity(sessionId);
     annotateIdentity(sessionId, {
-      state: value,
       cwd: context.cwd,
-      extensions: sessionFileExtension(context),
+      extensions: sessionFileExtension(context, value),
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -281,19 +275,6 @@ function updateActivityState(
   }
 }
 
-function reportSession(context: SessionContext): void {
-  const sessionId = context.sessionManager.getSessionId();
-  if (!sessionId) return;
-
-  try {
-    ensureIdentity(sessionId);
-    const extensions = sessionFileExtension(context);
-    if (extensions) annotateIdentity(sessionId, { extensions });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.warn(`agent-id: unable to resolve the session identity: ${detail}`);
-  }
-}
 
 export const CONTEXT_MESSAGE_TYPE = "dev.derekstride.agent-id.context-v1";
 export const CONTEXT_MESSAGE_CONTENT =
@@ -645,7 +626,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
     ensureContextMessage(context, (message) => pi.sendMessage(message));
-    reportSession(context);
+    updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("agent_start", (_event, context) => {

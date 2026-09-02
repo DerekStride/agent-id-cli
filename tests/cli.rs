@@ -64,6 +64,12 @@ fn json_contains_the_canonical_assignment() {
     assert_eq!(assignment.session_id, "session-2");
     assert_eq!(assignment.family_name, "Oak");
     assert_eq!(assignment.realm, "Darkwood");
+    assert_eq!(assignment.state.value.to_string(), "unknown");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("by-session/session-2.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(persisted.get("state").is_none());
     assert_eq!(
         assignment.slug,
         format!(
@@ -88,6 +94,35 @@ fn json_contains_the_canonical_assignment() {
         let looked_up: Assignment = serde_json::from_slice(&lookup.stdout).unwrap();
         assert_eq!(looked_up, assignment);
     }
+}
+
+#[test]
+fn legacy_top_level_state_is_rejected() {
+    let root = TempDir::new().unwrap();
+    let registered = command(&root)
+        .args(["register", "legacy-state", "--json"])
+        .output()
+        .unwrap();
+    assert!(registered.status.success(), "{registered:?}");
+
+    let path = root.path().join("by-session/legacy-state.json");
+    let mut persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    persisted["state"] = serde_json::json!({
+        "value": "waiting",
+        "updated_at": "2026-01-01T00:00:00Z",
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+
+    let lookup = command(&root)
+        .args(["lookup", "legacy-state", "--json"])
+        .output()
+        .unwrap();
+    assert!(!lookup.status.success(), "{lookup:?}");
+    assert!(
+        String::from_utf8_lossy(&lookup.stderr).contains("unknown field `state`"),
+        "{lookup:?}"
+    );
 }
 
 #[test]
@@ -141,7 +176,7 @@ fn annotate_updates_discovers_and_clears_summary() {
     assert_eq!(
         String::from_utf8(human.stdout).unwrap(),
         format!(
-            "{}\t{}\tsummary:Implementing activity summaries\n",
+            "{}\t{}\tstate:unknown\tsummary:Implementing activity summaries\n",
             annotated.name, annotated.session_id
         )
     );
@@ -160,7 +195,7 @@ fn annotate_updates_discovers_and_clears_summary() {
     assert!(human.status.success(), "{human:?}");
     assert_eq!(
         String::from_utf8(human.stdout).unwrap(),
-        format!("{}\t{}\n", cleared.name, cleared.session_id)
+        format!("{}\t{}\tstate:unknown\n", cleared.name, cleared.session_id)
     );
 }
 
@@ -180,7 +215,17 @@ fn annotate_updates_state_independently_from_summary() {
         .unwrap();
     assert!(working.status.success(), "{working:?}");
     let working: Assignment = serde_json::from_slice(&working.stdout).unwrap();
-    assert_eq!(working.state.as_ref().unwrap().value.to_string(), "working");
+    assert_eq!(working.state.value.to_string(), "working");
+    assert_eq!(working.extensions["omp"].data["state"]["value"], "working");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("by-session/state-session.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(persisted.get("state").is_none());
+    assert_eq!(
+        persisted["extensions"]["omp"]["data"]["state"]["value"],
+        "working"
+    );
     assert_eq!(working.summary, None);
     assert_eq!(working.name, registered.name);
     assert_eq!(working.created_at, registered.created_at);
@@ -201,7 +246,7 @@ fn annotate_updates_state_independently_from_summary() {
     assert!(waiting.status.success(), "{waiting:?}");
     let waiting: Assignment = serde_json::from_slice(&waiting.stdout).unwrap();
     assert_eq!(waiting.summary.as_ref().unwrap().text, "Waiting for review");
-    assert_eq!(waiting.state.as_ref().unwrap().value.to_string(), "waiting");
+    assert_eq!(waiting.state.value.to_string(), "waiting");
 
     let human = command(&root).args(["discover"]).output().unwrap();
     assert!(human.status.success(), "{human:?}");
@@ -219,11 +264,12 @@ fn annotate_updates_state_independently_from_summary() {
         .unwrap();
     assert!(cleared.status.success(), "{cleared:?}");
     let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
-    assert_eq!(cleared.state, None);
+    assert_eq!(cleared.state.value.to_string(), "unknown");
+    assert!(cleared.extensions["omp"].data.get("state").is_none());
     assert_eq!(cleared.summary.as_ref().unwrap().text, "Waiting for review");
 
     let invalid = command(&root)
-        .args(["annotate", "state-session", "--state", "unknown"])
+        .args(["annotate", "state-session", "--state", "not-a-state"])
         .output()
         .unwrap();
     assert!(!invalid.status.success());
@@ -260,7 +306,7 @@ fn annotate_updates_and_clears_cwd_metadata() {
     assert_eq!(
         String::from_utf8(human.stdout).unwrap(),
         format!(
-            "{}\t{}\tcwd:/work/agent-id\n",
+            "{}\t{}\tstate:unknown\tcwd:/work/agent-id\n",
             annotated.name, annotated.session_id
         )
     );
@@ -272,11 +318,7 @@ fn annotate_updates_and_clears_cwd_metadata() {
     assert!(stateful.status.success(), "{stateful:?}");
     let stateful: Assignment = serde_json::from_slice(&stateful.stdout).unwrap();
     assert_eq!(stateful.cwd.as_deref(), Some("/work/agent-id"));
-    assert_eq!(
-        stateful.state.as_ref().unwrap().value.to_string(),
-        "working"
-    );
-
+    assert_eq!(stateful.state.value.to_string(), "working");
     let cleared = command(&root)
         .args(["annotate", "cwd-session", "--clear-cwd", "--json"])
         .output()
@@ -284,7 +326,7 @@ fn annotate_updates_and_clears_cwd_metadata() {
     assert!(cleared.status.success(), "{cleared:?}");
     let cleared: Assignment = serde_json::from_slice(&cleared.stdout).unwrap();
     assert_eq!(cleared.cwd, None);
-    assert_eq!(cleared.state.as_ref().unwrap().value.to_string(), "working");
+    assert_eq!(cleared.state.value.to_string(), "working");
 
     let invalid = command(&root)
         .args(["annotate", "cwd-session", "--cwd", "/work\nagent-id"])
@@ -586,6 +628,8 @@ fn discover_overlays_matching_herdr_runtime_without_persisting_it() {
         .args([
             "annotate",
             "runtime-session",
+            "--state",
+            "idle",
             "--extension",
             r#"omp={"session_file":"/tmp/runtime-session.jsonl"}"#,
             "--json",
@@ -613,7 +657,9 @@ JSON
     assert!(output.status.success(), "{output:?}");
     let records: Value = serde_json::from_slice(&output.stdout).unwrap();
     let runtime = &records[0]["runtime"];
+    assert_eq!(records[0]["state"]["value"], "working");
     assert_eq!(runtime["provider"], "herdr");
+    assert_eq!(runtime["state"], "working");
     assert_eq!(runtime["locations"][0]["agent_status"], "working");
     assert_eq!(runtime["locations"][0]["pane_id"], "w1:p1");
     assert_eq!(runtime["locations"][0]["workspace_label"], "agent-id");
@@ -638,6 +684,7 @@ JSON
         .unwrap();
     assert!(lookup.status.success(), "{lookup:?}");
     let assignment: Value = serde_json::from_slice(&lookup.stdout).unwrap();
+    assert_eq!(assignment["state"]["value"], "idle");
     assert!(assignment.get("runtime").is_none());
 
     executable(&herdr, "#!/bin/sh\nprintf 'unavailable\\n' >&2\nexit 1\n");
@@ -649,6 +696,7 @@ JSON
     let degraded = degraded.args(["discover", "--json"]).output().unwrap();
     assert!(degraded.status.success(), "{degraded:?}");
     let records: Value = serde_json::from_slice(&degraded.stdout).unwrap();
+    assert_eq!(records[0]["state"]["value"], "idle");
     assert!(records[0].get("runtime").is_none());
     assert!(String::from_utf8(degraded.stderr)
         .unwrap()

@@ -107,11 +107,11 @@ pub struct AnnotateArgs {
     #[arg(long, conflicts_with = "summary")]
     pub clear_summary: bool,
 
-    /// Set the activity state
+    /// Set the OMP lifecycle state signal
     #[arg(long, value_name = "VALUE", conflicts_with = "clear_state")]
     pub state: Option<ActivityStateValue>,
 
-    /// Remove the activity state
+    /// Remove the OMP lifecycle state signal
     #[arg(long, conflicts_with = "state")]
     pub clear_state: bool,
 

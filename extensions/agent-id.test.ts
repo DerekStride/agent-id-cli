@@ -88,23 +88,27 @@ describe("OMP session metadata", () => {
     expect(extensions).toEqual({
       omp: { session_file: "/tmp/sessions/context-session.jsonl" },
     });
+    const statefulExtensions = sessionFileExtension(context, "working");
+    expect(statefulExtensions).toEqual({
+      omp: {
+        session_file: "/tmp/sessions/context-session.jsonl",
+        state: "working",
+      },
+    });
     expect(
       buildAnnotateArgs("context-session", {
-        state: "working",
         cwd: "/tmp/context",
-        extensions,
+        extensions: statefulExtensions,
       }),
     ).toEqual([
       "annotate",
       "--session-id",
       "context-session",
       "--json",
-      "--state",
-      "working",
       "--cwd",
       "/tmp/context",
       "--extension",
-      'omp={\"session_file\":\"/tmp/sessions/context-session.jsonl\"}',
+      'omp={\"session_file\":\"/tmp/sessions/context-session.jsonl\",\"state\":\"working\"}',
     ]);
   });
 
@@ -121,6 +125,9 @@ describe("OMP session metadata", () => {
     };
 
     expect(sessionFileExtension(context)).toBeUndefined();
+    expect(sessionFileExtension(context, "idle")).toEqual({
+      omp: { state: "idle" },
+    });
     context.sessionManager.getSessionFile = () => "relative/session.jsonl";
     expect(sessionFileExtension(context)).toBeUndefined();
     context.sessionManager.getSessionFile = () => {
