@@ -24,7 +24,7 @@ pub enum Commands {
     Current(CurrentArgs),
     /// Set or clear the current-work summary for a registered session
     Annotate(AnnotateArgs),
-    /// List identity assignments; stopped assignments are hidden by default
+    /// Find registered identities for related work; stopped assignments are hidden by default
     Discover(DiscoverArgs),
     /// Remove identity assignments older than a cutoff
     Prune(PruneArgs),
@@ -143,6 +143,10 @@ impl AnnotateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    about = "Find identity assignments for related work",
+    after_help = "Neighbor selection: prefer an agent whose current work is related to the request. Do not contact arbitrary agents merely because they are idle or discoverable. If no suitable neighbor is apparent, do not broadcast; ask the user or report that no suitable neighbor was found. An explicit recipient chosen by the user takes precedence."
+)]
 pub struct DiscoverArgs {
     /// Maximum records to print; zero prints all records
     #[arg(long, default_value_t = 20)]

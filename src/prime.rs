@@ -29,6 +29,10 @@ Call `agent-id current --json` to inspect the complete current assignment. The c
 
 The top-level state is materialized from Herdr runtime state first, then the OMP lifecycle signal, and otherwise `unknown`. Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent-id annotate` to publish `waiting` or `blocked`, or to set or clear a summary or namespaced extension value when an explicit update is needed. Automatic summaries use completed agent turns; explicit updates remain authoritative.
 
+## Neighbor selection
+
+When a request needs another agent, use `agent-id discover` to choose an appropriate neighbor before initiating agent-to-agent communication. Prefer an agent whose current work is related to the request; use summaries and Herdr context as evidence, not proof. Do not contact arbitrary agents for independent reviews or unrelated requests merely because they are idle or discoverable. If no suitable neighbor is apparent, do not broadcast; ask the user or report that no suitable neighbor was found. An explicit recipient chosen by the user takes precedence. This project helps identify recipients; the communication mechanism handles delivery.
+
 ## CLI fallback
 
 Direct CLI use is normally unnecessary under OMP. If the extension is unavailable, the CLI resolves a session from:

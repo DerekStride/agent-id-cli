@@ -518,6 +518,21 @@ fn prime_json_contains_the_agent_workflow_and_command_contract() {
     assert!(documentation.contains("--extension OWNER=JSON"));
     assert!(documentation.contains("Inside Herdr"));
     assert!(documentation.contains("stopped"));
+    assert!(documentation.contains("appropriate neighbor"));
+    assert!(documentation.contains("Do not contact arbitrary agents"));
+}
+
+#[test]
+fn discover_help_contains_neighbor_guardrails() {
+    let root = TempDir::new().unwrap();
+    let output = command(&root)
+        .args(["discover", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("Do not contact arbitrary agents"), "{help}");
+    assert!(help.contains("explicit recipient"), "{help}");
 }
 
 #[test]
