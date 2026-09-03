@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import agentIdExtension, {
   ACTIVITY_STATE_VALUES,
@@ -68,6 +71,46 @@ describe("identity context message", () => {
     expect(branchHasContextMessage(entries)).toBe(true);
 
     expect(CONTEXT_MESSAGE_CONTENT).toContain("agent-id current --json");
+  });
+});
+
+describe("agent-id subprocess output", () => {
+  test("does not leak a missing identity lookup during registration", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agent-id-extension-"));
+    try {
+      const extensionPath = path.join(import.meta.dir, "agent-id.ts");
+      const script = `
+        import agentIdExtension from ${JSON.stringify(extensionPath)};
+        const handlers = new Map();
+        const pi = {
+          on(event, handler) { handlers.set(event, handler); },
+          appendEntry() {},
+          sendMessage() {},
+        };
+        agentIdExtension(pi);
+        handlers.get("session_start")?.({}, {
+          cwd: "/tmp/context",
+          sessionManager: {
+            getSessionId: () => "fresh-session",
+            getBranch: () => [],
+          },
+          models: { resolve: () => undefined },
+          modelRegistry: { resolver: () => undefined },
+        });
+      `;
+      const result = Bun.spawnSync(["bun", "-e", script], {
+        env: { ...process.env, AGENT_ID_HOME: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(new TextDecoder().decode(result.stderr)).not.toContain(
+        "no identity found",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

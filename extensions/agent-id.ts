@@ -146,6 +146,7 @@ function runAgentId(args: string[]): string {
   return execFileSync("agent-id", args, {
     env: { ...process.env },
     encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
     timeout: 5000,
   });
 }
