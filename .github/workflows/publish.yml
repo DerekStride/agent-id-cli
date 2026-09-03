@@ -47,10 +47,35 @@ jobs:
             exit 1
           fi
 
+
+  release-notes:
+    name: Generate release notes
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: version-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Generate conventional commit notes
+        run: python3 scripts/generate-release-notes.py --tag "${{ github.event.release.tag_name }}" > release-notes.md
+
+      - name: Update GitHub release notes
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.event.release.tag_name }}" --repo "$GH_REPO" --notes-file release-notes.md
+
   build-macos-artifacts:
     name: Build macOS release artifacts (${{ matrix.target }})
     if: github.event_name == 'release' && github.event.action == 'published'
-    needs: version-check
+    needs: [version-check, release-notes]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -190,7 +215,7 @@ jobs:
   publish:
     name: Publish to crates.io
     if: github.event_name == 'release' && github.event.action == 'published'
-    needs: version-check
+    needs: [version-check, release-notes]
     runs-on: ubuntu-latest
 
     steps:
