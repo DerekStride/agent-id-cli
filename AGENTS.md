@@ -91,7 +91,7 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 | Tool call | Injects `AGENT_ID_SESSION_ID` only into matching `agent-id current` invocations through OMP's Bash tool. |
 | Session shuts down | Publishes `stopped` under `extensions.omp`. |
 
-On session start, switch, branch, and tree navigation, the extension inserts one hidden persistent context message per branch pointing agents to `agent-id prime` and `agent-id current --json`. It checks the stable message type before insertion so resumed branches reuse the existing prompt prefix.
+The plugin bundles `skills/agent-id/SKILL.md` for on-demand identity and neighbor-selection guidance. The extension does not insert instructional context into session branches.
 
 The extension does not register an identity tool. For matching `agent-id current` invocations through OMP's Bash tool, the extension injects the current session ID as `AGENT_ID_SESSION_ID`. It preserves a caller-provided value and does not modify the parent shell or unrelated Bash commands.
 

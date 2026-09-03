@@ -9,12 +9,8 @@ import agentIdExtension, {
   AUTO_SUMMARY_ENTRY_TYPE,
   AUTO_SUMMARY_LIMIT,
   AUTO_SUMMARY_MAX_CHARS,
-  CONTEXT_MESSAGE_CONTENT,
-  CONTEXT_MESSAGE_TYPE,
-  branchHasContextMessage,
   buildAnnotateArgs,
   buildSummaryInput,
-  ensureContextMessage,
   injectIdentityForCurrent,
   latestExchange,
   normalizeAutoSummary,
@@ -35,60 +31,22 @@ describe("activity state contract", () => {
   });
 });
 
-describe("identity context message", () => {
-  test("adds one hidden message and deduplicates it on the branch", () => {
-    const entries: Array<{ type: string; customType?: string }> = [];
-    const sent: Array<{
-      customType: string;
-      content: string;
-      display: boolean;
-    }> = [];
-    const context = {
-      cwd: "/tmp/context",
-      sessionManager: {
-        getSessionId: () => "context-session",
-        getBranch: () => entries,
-      },
-      models: { resolve: () => undefined },
-      modelRegistry: { resolver: () => undefined },
-    };
-    const sendMessage = (message: (typeof sent)[number]) => {
-      sent.push(message);
-      entries.push({ type: "custom_message", customType: message.customType });
-    };
-
-    expect(branchHasContextMessage(entries)).toBe(false);
-    ensureContextMessage(context, sendMessage);
-    ensureContextMessage(context, sendMessage);
-
-    expect(sent).toEqual([
-      {
-        customType: CONTEXT_MESSAGE_TYPE,
-        content: CONTEXT_MESSAGE_CONTENT,
-        display: false,
-      },
-    ]);
-    expect(branchHasContextMessage(entries)).toBe(true);
-
-    expect(CONTEXT_MESSAGE_CONTENT).toContain("agent-id current --json");
-  });
-});
-
-describe("agent-id subprocess output", () => {
-  test("does not leak a missing identity lookup during registration", () => {
+describe("agent-id subprocess output and context", () => {
+  test("does not leak lookup errors or publish context guidance", () => {
     const root = mkdtempSync(path.join(tmpdir(), "agent-id-extension-"));
     try {
       const extensionPath = path.join(import.meta.dir, "agent-id.ts");
       const script = `
         import agentIdExtension from ${JSON.stringify(extensionPath)};
-        const handlers = new Map();
+        const handlers = {};
+        let sentMessages = 0;
         const pi = {
-          on(event, handler) { handlers.set(event, handler); },
+          on(event, handler) { handlers[event] = handler; },
           appendEntry() {},
-          sendMessage() {},
+          sendMessage() { sentMessages += 1; },
         };
         agentIdExtension(pi);
-        handlers.get("session_start")?.({}, {
+        handlers.session_start?.({}, {
           cwd: "/tmp/context",
           sessionManager: {
             getSessionId: () => "fresh-session",
@@ -97,6 +55,7 @@ describe("agent-id subprocess output", () => {
           models: { resolve: () => undefined },
           modelRegistry: { resolver: () => undefined },
         });
+        if (sentMessages !== 0) throw new Error("unexpected context message");
       `;
       const result = Bun.spawnSync(["bun", "-e", script], {
         env: { ...process.env, AGENT_ID_HOME: root },

@@ -30,7 +30,7 @@ Install the binary first, then install the OMP extension from this repository:
 omp plugin install https://github.com/DerekStride/agent-id-cli
 ```
 
-Once installed, the extension handles the normal identity workflow automatically.
+Once installed, the extension handles the normal identity workflow automatically. The plugin also bundles an on-demand skill for identity inspection and selecting relevant neighbors when coordination is needed.
 
 ## Usage
 

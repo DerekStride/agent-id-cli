@@ -16,11 +16,6 @@ type SessionEntryLike = {
   customType?: string;
   data?: unknown;
 };
-type ContextMessage = {
-  customType: string;
-  content: string;
-  display: boolean;
-};
 
 type SummaryModel = { provider: string; id: string; baseUrl?: string };
 
@@ -92,10 +87,6 @@ type ExtensionAPI = {
     handler: (event: AgentEndEvent, context: SessionContext) => Promise<void>,
   ): void;
   appendEntry(customType: string, data: unknown): void;
-  sendMessage(
-    message: ContextMessage,
-    options?: { deliverAs: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
-  ): void;
 };
 
 type Assignment = {
@@ -274,33 +265,6 @@ function updateActivityState(
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to update the activity state: ${detail}`);
   }
-}
-
-
-export const CONTEXT_MESSAGE_TYPE = "dev.derekstride.agent-id.context-v1";
-export const CONTEXT_MESSAGE_CONTENT =
-  "Use `agent-id prime` to understand Agent ID or discover other agents. Use `agent-id current --json` to inspect your current identity.";
-
-export function branchHasContextMessage(
-  entries: readonly SessionEntryLike[],
-): boolean {
-  return entries.some(
-    (entry) =>
-      entry.type === "custom_message" &&
-      entry.customType === CONTEXT_MESSAGE_TYPE,
-  );
-}
-
-export function ensureContextMessage(
-  context: SessionContext,
-  sendMessage: (message: ContextMessage) => void,
-): void {
-  if (branchHasContextMessage(context.sessionManager.getBranch())) return;
-  sendMessage({
-    customType: CONTEXT_MESSAGE_TYPE,
-    content: CONTEXT_MESSAGE_CONTENT,
-    display: false,
-  });
 }
 
 export const AUTO_SUMMARY_ENTRY_TYPE = "dev.derekstride.agent-id.auto-summary";
@@ -608,25 +572,21 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("tool_call", (event, context) => injectIdentityForCurrent(event, context));
   pi.on("session_start", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
-    ensureContextMessage(context, (message) => pi.sendMessage(message));
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_switch", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
-    ensureContextMessage(context, (message) => pi.sendMessage(message));
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_branch", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
-    ensureContextMessage(context, (message) => pi.sendMessage(message));
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
   pi.on("session_tree", (_event, context) => {
     currentSessionId = context.sessionManager.getSessionId();
-    ensureContextMessage(context, (message) => pi.sendMessage(message));
     updateActivityState(context, "idle");
     restoreSummarySession(context);
   });
