@@ -35,7 +35,7 @@ class AgentIdCli < Formula
     ENV["AGENT_ID_HOME"] = testpath/"agent-id"
     ENV["AGENT_REALM"] = "Homebrew"
     output = shell_output("#{bin}/agent-id register test-session --json")
-    assert_match '"session_id":"test-session"', output
+    assert_equal "test-session", JSON.parse(output).fetch("session_id")
   end
 end
 EOF
