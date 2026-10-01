@@ -55,7 +55,7 @@ Updates summary, OMP lifecycle state, working-directory metadata, or namespaced 
 
 ### `agent-id discover`
 
-Lists non-stopped assignments by `updated_at`, newest first. Use `--all` to include stopped assignments. Outside Herdr, discovery includes all matching non-stopped registry assignments. Inside Herdr, default discovery is limited to assignments matched to live Herdr agents; `--all` retains all registry assignments while adding runtime projections. The top-level state is materialized from Herdr runtime state first, then the OMP extension state, and otherwise `unknown`. Human-readable results include available summaries, materialized states, and working directories; JSON includes the complete assignments. Herdr runtime matching uses exact OMP session-file metadata.
+Lists non-stopped assignments by `updated_at`, newest first. Use `--all` to include stopped assignments. Outside Herdr, discovery includes all matching non-stopped registry assignments. Inside Herdr, default discovery is limited to assignments matched to live Herdr agents; `--all` retains all registry assignments while adding runtime projections. The top-level state is materialized from Herdr runtime state first, then the OMP extension state, and otherwise `unknown`. Human-readable results include available summaries, materialized states, and working directories; JSON includes the complete assignments. Herdr runtime matching is host-neutral: a Herdr agent joins an assignment only when its pane host label, session owner, and `herdr:<host>` source agree and its session reference exactly matches the assignment's session ID or the session file recorded under `extensions.omp`; ambiguous duplicate session files are never matched.
 
 ```text
 --limit N           Maximum records (default 20; zero means all)
@@ -79,23 +79,57 @@ Removes assignments older than an RFC 3339 cutoff, including their name claims.
 
 Prints the agent-facing workflow and command contract. `--prelude` omits the command reference; `--json` wraps the documentation in a JSON object.
 
-## OMP extension implementation
+## OMP and Pi extension implementation
 
-`extensions/agent-id.ts` is the companion adapter. It reads the authoritative session ID and working directory from OMP, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and manages session lifecycle and summaries. OMP lifecycle signals are stored under the `extensions.omp` namespace.
+`extensions/agent-id.ts` is the shared companion extension for OMP and Pi. It reads the authoritative session ID and working directory from the host, invokes the `agent-id` binary from `PATH` with explicit arguments, parses the returned assignment, and manages session lifecycle and summaries. Lifecycle signals and the session file are stored under the `extensions.omp` namespace on both hosts; that name is a documented legacy namespace read by the CLI and Herdr discovery, not a host indicator.
 
-| OMP event | Extension behavior |
+| Host event | Extension behavior |
 |---|---|
-| Session start, switch, branch, or tree navigation | Looks up or registers the identity, records the OMP session file and working directory, and publishes `idle` under `extensions.omp`. |
-| Agent turn starts | Refreshes the OMP session file and publishes `working` under `extensions.omp`. |
-| Agent turn ends | Publishes `idle` under `extensions.omp` and may refresh its current-work summary. |
-| Tool call | Injects `AGENT_ID_SESSION_ID` only into matching `agent-id current` invocations through OMP's Bash tool. |
-| Session shuts down | Publishes `stopped` under `extensions.omp`. |
+| Session start (both), OMP switch or branch, tree navigation (both) | Looks up or registers the identity, records the session file and working directory, and publishes `idle`. |
+| Agent turn starts | Refreshes the session file and publishes `working`. |
+| Agent turn ends | OMP: publishes `idle` unless `willContinue` is set. Pi: `agent_settled` publishes `idle`. Both may refresh the current-work summary at `agent_end`. |
+| Tool call | Wraps matching `agent-id current` invocations so `AGENT_ID_SESSION_ID` is available to that command. |
+| Session shuts down | Publishes `stopped`. Pi's `session_shutdown` with `reason: "reload"` keeps the same session id and is not treated as an end. |
 
-The plugin bundles `skills/agent-id/SKILL.md` for on-demand identity and neighbor-selection guidance. The extension does not insert instructional context into session branches.
+The package bundles `skills/agent-id/SKILL.md` for on-demand identity and neighbor-selection guidance. The extension does not insert instructional context into session branches and does not register an identity tool.
 
-The extension does not register an identity tool. For matching `agent-id current` invocations through OMP's Bash tool, the extension injects the current session ID as `AGENT_ID_SESSION_ID`. It preserves a caller-provided value and does not modify the parent shell or unrelated Bash commands.
+### Host adapter
 
-After completed turns, the extension can derive up to three successful summaries. Each completion receives only the previous summary, latest request, and latest reply; it uses the `@tiny` model role with `@smol` as fallback, caps output at 80 characters, and persists through `agent-id annotate`. Summary generation state is stored as a session entry and restored across resume, branch, and tree navigation. Missing model access does not prevent registration or lifecycle updates.
+Host differences live in `extensions/lib/host.ts`; the shared workflow in `extensions/agent-id.ts` sees one contract. Detect the host from verified context capabilities, never from process environment markers (`AI_AGENT`, `PI_*`), which nested hosts inherit: OMP exposes both `ctx.models.resolve()` and `ctx.modelRegistry.resolver()`; otherwise the Pi adapter is used.
+
+- Lifecycle: OMP emits `session_switch` (new, resume, fork) from session replacement, `session_branch` from `branch()`/`branchFromBtw()` (a new session file cut from an entry), and `session_tree` from `navigateTree()`; these are distinct operations that never fire together, and OMP never re-emits `session_start` for them. The OMP adapter subscribes to `session_switch`, `session_branch`, and `session_before_branch`; `session_tree`/`session_before_tree` are shared because both hosts emit them. Pi tears the runtime down and emits `session_start` with a reason for new, resume, fork, and reload; the Pi adapter subscribes only to `session_before_fork` and `agent_settled`. Do not register both hosts' post-switch events, which would double-restore state.
+- Argument rewriting: OMP applies a returned `{ input }` replacement; Pi ignores the return value and requires mutating `event.input` in place. Neither host's Bash tool consumes `input.env`, so the adapter wraps the matching command in a subshell that sets `AGENT_ID_SESSION_ID` only when unset. Inherited values (including empty), inline assignments, and the parent shell are preserved.
+- Summaries: OMP resolves the `@tiny` role with `@smol` as fallback and completes through its bundled `@oh-my-pi/pi-ai`. Pi has no model roles and no settings surface for this extension, so it uses the current session model through `ctx.modelRegistry.complete()` with reasoning off; this keeps summaries on the user's selected provider and credentials. The additional cost on Pi is bounded: at most three completions per session, each with at most 2000 characters of request and reply context and 64 output tokens.
+
+All mutable runtime state (host adapter, active session id, summary queues) belongs to the extension instance created by the default export, never to module scope.
+
+After completed turns, the extension can derive up to three successful summaries. Each completion receives only the previous summary, latest request, and latest reply, caps output at 80 characters, and persists through `agent-id annotate`. Summary generation state is stored as a session entry and restored across resume, branch, and tree navigation. Missing model access does not prevent registration or lifecycle updates.
+
+Keep the CLI host-neutral: `AGENT_ID_SESSION_ID` is the integration point. Do not add `PI_*`, `OMP_*`, or other host-specific identity fallbacks to the Rust CLI; adapters translate host identity into that variable.
+
+### Tests and manifests
+
+Maintain both host suites together. `extensions/agent-id.test.ts` runs under Bun and exercises OMP's event names, returned input replacements, `willContinue`, and the `@tiny`/`@smol` completion path (mocking `@oh-my-pi/pi-ai`). `extensions/agent-id.pi.test.ts` runs under the Node test runner and exercises Pi's `session_start` reasons, `session_before_fork`, `agent_settled`, shutdown reasons, in-place mutation, and `ctx.model` + `modelRegistry.complete`. Both suites use the same fake `agent-id` binary fixture; duplicated fixtures are intentional. When changing shared behavior, add matching assertions to both suites, and test lifecycle differences with each host's real event names.
+
+```bash
+bun run test:omp
+bun run test:pi
+```
+
+The suites require Bun 1.3.14+ and Node 24+. They use mocked host contexts; when changing adapter contracts, also smoke-test against the installed host loader (`pi --no-extensions -e "$PWD" -p ...` with an isolated `AGENT_ID_HOME` and `--session-dir`) and run the live checks described below.
+
+`package.json` declares explicit `pi` and `omp` resource manifests. Keep them explicit: Pi's conventional discovery loads every `*.ts` under `extensions/`, which would load the test suites and `lib/host.ts` as extensions.
+
+### Pi installation for development
+
+Install the binary, then load the checkout as a local Pi package (no symlinks):
+
+```bash
+pi install "$PWD"          # personal settings
+pi -e "$PWD"               # one invocation only
+```
+
+Reload the host after changing the extension.
 
 Lifecycle signals are `working`, `idle`, `waiting`, `blocked`, and `stopped`; `unknown` is the materialized fallback when no signal is available. Agent ID generates signal timestamps. The top-level `state` is not persisted as a source field.
 
@@ -107,7 +141,7 @@ Session records live at `by-session/<session-id>.json`; session IDs must be file
 
 Realm resolution order is `--realm`, `AGENT_REALM` for tests or overrides, then `$XDG_CONFIG_HOME/agent-id/realm` with `$HOME/.config/agent-id/realm` as fallback. If no configuration exists, registration selects a realm and persists it for future sessions on the machine.
 
-Summary, working-directory, and extension fields update independently of the permanent name. Extension owners are bounded lowercase namespaces; each update atomically replaces one owner's JSON value. The OMP extension writes its absolute session file and lifecycle state under `extensions.omp`; discover materializes the top-level state from the Herdr runtime projection when present, then the OMP signal, then `unknown`.
+Summary, working-directory, and extension fields update independently of the permanent name. Extension owners are bounded lowercase namespaces; each update atomically replaces one owner's JSON value. The extension writes its absolute session file and lifecycle state under the legacy `extensions.omp` namespace on both OMP and Pi; discover materializes the top-level state from the Herdr runtime projection when present, then the OMP signal, then `unknown`.
 
 ## Release workflow
 
@@ -115,7 +149,7 @@ When the user says “Let's do the release workflow,” drive the release throug
 
 1. Confirm the worktree contains only the intended release changes, the branch is `main`, and the `v<version>` tag does not already exist.
 2. Update the version in `Cargo.toml` and `package.json`, then run Cargo without `--locked` once to refresh the root `agent-id-cli` entry in `Cargo.lock`.
-3. Run `cargo fmt --all -- --check`, `cargo test --all --locked`, `bun test extensions/agent-id.test.ts`, and `cargo package --locked --allow-dirty`.
+3. Run `cargo fmt --all -- --check`, `cargo test --all --locked`, `bun run test:omp`, `bun run test:pi`, and `cargo package --locked --allow-dirty`.
 4. Commit all release changes with a Conventional Commit message, the relevant `SQ-Task` trailer, and the required OMP/model co-author trailers.
 5. Push `main`, create and push the annotated `v<version>` tag, then publish a GitHub release for that existing tag with generated notes. A tag push runs only the version check; publishing the GitHub release triggers macOS artifacts, crates.io publishing, and the Homebrew tap update.
 6. Watch the release-triggered `Publish` workflow until every required job succeeds. Verify the GitHub release has both macOS archives and checksums; report whether crates.io and the Homebrew tap published successfully.

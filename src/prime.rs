@@ -21,13 +21,13 @@ pub fn generate(prelude_only: bool) -> String {
 
 Agent ID provides the permanent human-readable identity for a coding-agent session. The identity is keyed by the harness session ID; never invent a name or register a second name for the same session.
 
-## OMP workflow
+## Host extension workflow
 
-The OMP extension automatically looks up or registers the current session, records its working directory and session file, and publishes its lifecycle signal under the `extensions.omp` namespace.
+The companion extension for OMP and Pi automatically looks up or registers the current session, records its working directory and session file, and publishes its lifecycle signal under the `extensions.omp` namespace (a legacy name used on both hosts).
 
 Call `agent-id current --json` to inspect the complete current assignment. The command uses `AGENT_ID_SESSION_ID` and never registers a missing identity. Call `agent-id discover` directly when you need to find other identities. Discover lists non-stopped registry assignments by default; outside Herdr this includes all matching assignments, while inside Herdr it is limited to identities matched to live Herdr agents. Use `agent-id discover --all` to include stopped and historical registry assignments; inside Herdr, runtime projections are added where available.
 
-The top-level state is materialized from Herdr runtime state first, then the OMP lifecycle signal, and otherwise `unknown`. Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent-id annotate` to publish `waiting` or `blocked`, or to set or clear a summary or namespaced extension value when an explicit update is needed. Automatic summaries use completed agent turns; explicit updates remain authoritative.
+The top-level state is materialized from Herdr runtime state first, then the extension's lifecycle signal, and otherwise `unknown`. Lifecycle hooks publish `working`, `idle`, and `stopped` automatically. Use `agent-id annotate` to publish `waiting` or `blocked`, or to set or clear a summary or namespaced extension value when an explicit update is needed. Automatic summaries use completed agent turns; explicit updates remain authoritative.
 
 ## Neighbor selection
 
@@ -35,7 +35,7 @@ When a request needs another agent, use `agent-id discover` to choose an appropr
 
 ## CLI fallback
 
-Direct CLI use is normally unnecessary under OMP. If the extension is unavailable, the CLI resolves a session from:
+Direct CLI use is normally unnecessary when the extension is loaded in OMP or Pi. The extension supplies `AGENT_ID_SESSION_ID` to `agent-id current` invocations; host-specific session variables are never read. If the extension is unavailable, the CLI resolves a session from:
 
 1. An explicit `SESSION_ID` argument or `--session-id ID`.
 2. `AGENT_ID_SESSION_ID`.

@@ -1,6 +1,6 @@
 {
   "name": "agent-id-cli",
-  "description": "Portable identity registry and OMP extension for coding-agent sessions",
+  "description": "Portable identity registry and OMP/Pi extension for coding-agent sessions",
   "version": "0.4.2",
   "private": true,
   "license": "MIT",
@@ -11,6 +11,18 @@
   "type": "module",
   "engines": {
     "bun": ">=1.3.14"
+  },
+  "scripts": {
+    "test:omp": "bun test ./extensions/agent-id.test.ts",
+    "test:pi": "node --test extensions/agent-id.pi.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/agent-id.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "omp": {
     "extensions": [

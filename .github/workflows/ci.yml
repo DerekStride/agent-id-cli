@@ -38,7 +38,7 @@ jobs:
         run: cargo test --all --locked --verbose
 
   extension:
-    name: OMP extension
+    name: OMP and Pi extensions
     runs-on: ubuntu-latest
 
     steps:
@@ -50,5 +50,13 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Run extension tests
-        run: bun test extensions/agent-id.test.ts
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Test OMP adapter
+        run: bun run test:omp
+
+      - name: Test Pi adapter
+        run: bun run test:pi

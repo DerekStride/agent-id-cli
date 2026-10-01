@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::activity::ActivityState;
 use crate::registry::Assignment;
 
+/// Legacy metadata namespace. The companion extension records the absolute
+/// session file here on every host (OMP and Pi); the name is not a host label.
 const OMP_EXTENSION_OWNER: &str = "omp";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -207,10 +209,12 @@ fn join_snapshot(
         let Some(session) = agent.agent_session.as_ref() else {
             continue;
         };
-        if agent.agent.as_deref() != Some("omp")
-            || session.agent != "omp"
-            || session.source != "herdr:omp"
-        {
+        // Host-neutral correlation: the pane occupant, the session owner, and
+        // the session source must name the same non-empty host.
+        let Some(host) = agent.agent.as_deref().filter(|host| !host.is_empty()) else {
+            continue;
+        };
+        if session.agent != host || session.source != format!("herdr:{host}") {
             continue;
         }
         let index = match session.kind.as_str() {
@@ -319,12 +323,23 @@ mod tests {
     }
 
     fn agent(kind: &str, value: &str, pane_id: &str) -> AgentInfo {
+        host_agent("omp", "omp", "herdr:omp", kind, value, pane_id)
+    }
+
+    fn host_agent(
+        pane_host: &str,
+        session_host: &str,
+        source: &str,
+        kind: &str,
+        value: &str,
+        pane_id: &str,
+    ) -> AgentInfo {
         AgentInfo {
-            agent: Some("omp".to_string()),
+            agent: Some(pane_host.to_string()),
             agent_session: Some(AgentSession {
-                agent: "omp".to_string(),
+                agent: session_host.to_string(),
                 kind: kind.to_string(),
-                source: "herdr:omp".to_string(),
+                source: source.to_string(),
                 value: value.to_string(),
             }),
             agent_status: "working".to_string(),
@@ -374,5 +389,126 @@ mod tests {
             "w1:p2"
         );
         assert_eq!(records[0].runtime.as_ref().unwrap().observed_at, now);
+    }
+
+    fn snapshot(agents: Vec<AgentInfo>) -> Snapshot {
+        Snapshot {
+            agents,
+            tabs: Vec::new(),
+            workspaces: Vec::new(),
+        }
+    }
+
+    fn panes(record: &DiscoveredAssignment) -> Vec<&str> {
+        record
+            .runtime
+            .as_ref()
+            .map(|runtime| {
+                runtime
+                    .locations
+                    .iter()
+                    .map(|location| location.pane_id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn joins_any_host_whose_pane_session_and_source_agree() {
+        let now = Utc.timestamp_opt(2, 0).single().unwrap();
+        let assignments = vec![
+            assignment("omp-session", Some("/tmp/omp.jsonl")),
+            assignment("pi-session", Some("/tmp/pi.jsonl")),
+            assignment("other-session", None),
+        ];
+        let records = join_snapshot(
+            assignments,
+            snapshot(vec![
+                host_agent("omp", "omp", "herdr:omp", "path", "/tmp/omp.jsonl", "w1:p1"),
+                host_agent("pi", "pi", "herdr:pi", "path", "/tmp/pi.jsonl", "w1:p2"),
+                host_agent(
+                    "otherhost",
+                    "otherhost",
+                    "herdr:otherhost",
+                    "id",
+                    "other-session",
+                    "w1:p3",
+                ),
+            ]),
+            now,
+        );
+
+        assert_eq!(panes(&records[0]), vec!["w1:p1"]);
+        assert_eq!(panes(&records[1]), vec!["w1:p2"]);
+        assert_eq!(panes(&records[2]), vec!["w1:p3"]);
+    }
+
+    #[test]
+    fn rejects_inconsistent_or_empty_host_labels() {
+        let now = Utc.timestamp_opt(3, 0).single().unwrap();
+        let assignments = vec![assignment("session", Some("/tmp/session.jsonl"))];
+        let mut empty_host =
+            host_agent("", "pi", "herdr:pi", "path", "/tmp/session.jsonl", "w1:p4");
+        let mut missing_host = host_agent(
+            "pi",
+            "pi",
+            "herdr:pi",
+            "path",
+            "/tmp/session.jsonl",
+            "w1:p5",
+        );
+        missing_host.agent = None;
+        empty_host.agent = Some(String::new());
+        let records = join_snapshot(
+            assignments,
+            snapshot(vec![
+                // pane host disagrees with the session host
+                host_agent(
+                    "pi",
+                    "omp",
+                    "herdr:omp",
+                    "path",
+                    "/tmp/session.jsonl",
+                    "w1:p1",
+                ),
+                // source names a different host
+                host_agent(
+                    "pi",
+                    "pi",
+                    "herdr:omp",
+                    "path",
+                    "/tmp/session.jsonl",
+                    "w1:p2",
+                ),
+                // source lacks the herdr prefix
+                host_agent("pi", "pi", "pi", "id", "session", "w1:p3"),
+                empty_host,
+                missing_host,
+            ]),
+            now,
+        );
+
+        assert!(records[0].runtime.is_none());
+        assert_eq!(records[0].assignment.state.value.to_string(), "unknown");
+    }
+
+    #[test]
+    fn rejects_duplicate_session_paths_without_guessing() {
+        let now = Utc.timestamp_opt(4, 0).single().unwrap();
+        let assignments = vec![
+            assignment("first", Some("/tmp/shared.jsonl")),
+            assignment("second", Some("/tmp/shared.jsonl")),
+        ];
+        let records = join_snapshot(
+            assignments,
+            snapshot(vec![
+                host_agent("pi", "pi", "herdr:pi", "path", "/tmp/shared.jsonl", "w1:p1"),
+                host_agent("pi", "pi", "herdr:pi", "id", "second", "w1:p2"),
+            ]),
+            now,
+        );
+
+        assert!(records[0].runtime.is_none());
+        assert_eq!(panes(&records[1]), vec!["w1:p2"]);
     }
 }
