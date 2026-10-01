@@ -85,13 +85,15 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 
 | Host event | Extension behavior |
 |---|---|
-| Session start (both), OMP switch or branch, tree navigation (both) | Looks up or registers the identity, records the session file and working directory, and publishes `idle`. |
+| Session start (both), OMP switch or branch, tree navigation (both) | Looks up or registers the identity, records the session file and working directory, publishes `idle`, and shows the slug as the `agent-id` status. |
 | Agent turn starts | Refreshes the session file and publishes `working`. |
 | Agent turn ends | OMP: publishes `idle` unless `willContinue` is set. Pi: `agent_settled` publishes `idle`. Both may refresh the current-work summary at `agent_end`. |
 | Tool call | Wraps matching `agent-id current` invocations so `AGENT_ID_SESSION_ID` is available to that command. |
-| Session shuts down | Publishes `stopped`. Pi's `session_shutdown` with `reason: "reload"` keeps the same session id and is not treated as an end. |
+| Session shuts down | Publishes `stopped` and clears the `agent-id` status. Pi's `session_shutdown` with `reason: "reload"` keeps the same session id and is not treated as an end. |
 
 The package bundles `skills/agent-id/SKILL.md` for on-demand identity and neighbor-selection guidance. The extension does not insert instructional context into session branches and does not register an identity tool.
+
+Both hosts expose `ctx.ui.setStatus(key, text)`. The `agent-id` status renders wherever OMP places extension statuses: below the status line by default (`statusLine.showHookStatus`), or inline through the `status` segment of a custom status line. Pi shows extension statuses in its footer. The status key is stable so a local extension publishing the same identity replaces it rather than duplicating it.
 
 ### Host adapter
 

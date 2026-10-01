@@ -196,6 +196,27 @@ describe("host detection", () => {
 });
 
 describe("Pi lifecycle", () => {
+  test("publishes the session slug as a status, retains it on reload, and clears it on quit", async () => {
+    const h = harness();
+    const statuses: Array<[string, string | undefined]> = [];
+    const context = piContext("status-session", [], {
+      ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+    });
+    await h.emit("session_start", { reason: "startup" }, context);
+    await h.emit("agent_start", {}, context);
+    await h.emit("session_shutdown", { reason: "reload" }, context);
+    assert.deepEqual(statuses, [
+      ["agent-id", "test-agent-realm"],
+      ["agent-id", "test-agent-realm"],
+    ]);
+    await h.emit("session_start", { reason: "reload" }, context);
+    await h.emit("session_shutdown", { reason: "quit" }, context);
+    assert.deepEqual(statuses.slice(2), [
+      ["agent-id", "test-agent-realm"],
+      ["agent-id", undefined],
+    ]);
+  });
+
   test("registers idle on start, working on agent start, idle on settle, stopped on quit", async () => {
     const h = harness();
     const context = piContext("pi-session");

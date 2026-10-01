@@ -23,7 +23,7 @@ Agent ID provides the permanent human-readable identity for a coding-agent sessi
 
 ## Host extension workflow
 
-The companion extension for OMP and Pi automatically looks up or registers the current session, records its working directory and session file, and publishes its lifecycle signal under the `extensions.omp` namespace (a legacy name used on both hosts).
+The companion extension for OMP and Pi automatically looks up or registers the current session, records its working directory and session file, publishes its lifecycle signal under the `extensions.omp` namespace (a legacy name used on both hosts), and shows the session slug in the status line so the user can read it without asking.
 
 Call `agent-id current --json` to inspect the complete current assignment. The command uses `AGENT_ID_SESSION_ID` and never registers a missing identity. Call `agent-id discover` directly when you need to find other identities. Discover lists non-stopped registry assignments by default; outside Herdr this includes all matching assignments, while inside Herdr it is limited to identities matched to live Herdr agents. Use `agent-id discover --all` to include stopped and historical registry assignments; inside Herdr, runtime projections are added where available.
 

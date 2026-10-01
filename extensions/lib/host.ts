@@ -15,6 +15,7 @@ type SessionEntryLike = {
  */
 export type SessionContext = {
   cwd: string;
+  ui?: { setStatus(key: string, text: string | undefined): void };
   sessionManager: {
     getSessionId(): string | undefined;
     getSessionFile?(): string | undefined;

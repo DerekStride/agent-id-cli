@@ -187,6 +187,22 @@ describe("host detection", () => {
 });
 
 describe("OMP lifecycle", () => {
+  test("publishes the session slug as a status and clears it on shutdown", async () => {
+    const h = harness();
+    const statuses: Array<[string, string | undefined]> = [];
+    const context = ompContext("status-session", {
+      ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+    });
+    await h.emit("session_start", {}, context);
+    await h.emit("agent_start", {}, context);
+    await h.emit("session_shutdown", {}, context);
+    expect(statuses).toEqual([
+      ["agent-id", "test-agent-realm"],
+      ["agent-id", "test-agent-realm"],
+      ["agent-id", undefined],
+    ]);
+  });
+
   test("registers idle on start, working on agent start, idle on agent end, stopped on shutdown", async () => {
     const h = harness();
     const context = ompContext("omp-session");

@@ -4,7 +4,7 @@ Portable identity registry and OMP/Pi companion extension for coding-agent sessi
 
 The `agent-id` binary assigns a permanent human-readable name to a stable session ID. The registry is durable, realm-aware, and independent of any particular agent harness.
 
-In OMP or Pi, the companion extension makes identity automatic: it registers sessions, records the lifecycle signal, and derives a concise current-work summary from completed agent turns.
+In OMP or Pi, the companion extension makes identity automatic: it registers sessions, shows the session slug in the status line so you can read it off any window, records the lifecycle signal, and derives a concise current-work summary from completed agent turns.
 
 The Rust crate is named `agent-id-cli`; the installed binary remains `agent-id`.
 
