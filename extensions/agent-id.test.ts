@@ -187,17 +187,38 @@ describe("host detection", () => {
 });
 
 describe("OMP lifecycle", () => {
-  test("publishes the session slug as a status and clears it on shutdown", async () => {
+  test("publishes the dimmed slug as a below-editor widget and clears it on shutdown", async () => {
+    // OMP strips ANSI from hook statuses, so the slug goes to a widget instead.
     const h = harness();
     const statuses: Array<[string, string | undefined]> = [];
+    const widgets: Array<[string, string[] | undefined, unknown]> = [];
     const context = ompContext("status-session", {
-      ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+      ui: {
+        setStatus: (key, text) => { statuses.push([key, text]); },
+        setWidget: (key, content, options) => { widgets.push([key, content, options]); },
+        theme: { fg: (color, text) => `<${color}>${text}</${color}>` },
+      },
     });
     await h.emit("session_start", {}, context);
     await h.emit("agent_start", {}, context);
     await h.emit("session_shutdown", {}, context);
+    expect(statuses).toEqual([]);
+    expect(widgets).toEqual([
+      ["agent-id", ["<dim>test-agent-realm</dim>"], { placement: "belowEditor" }],
+      ["agent-id", ["<dim>test-agent-realm</dim>"], { placement: "belowEditor" }],
+      ["agent-id", undefined, { placement: "belowEditor" }],
+    ]);
+  });
+
+  test("falls back to a plain status when the host has no widget API", async () => {
+    const h = harness();
+    const statuses: Array<[string, string | undefined]> = [];
+    const context = ompContext("status-fallback", {
+      ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+    });
+    await h.emit("session_start", {}, context);
+    await h.emit("session_shutdown", {}, context);
     expect(statuses).toEqual([
-      ["agent-id", "test-agent-realm"],
       ["agent-id", "test-agent-realm"],
       ["agent-id", undefined],
     ]);

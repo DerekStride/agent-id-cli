@@ -15,7 +15,17 @@ type SessionEntryLike = {
  */
 export type SessionContext = {
   cwd: string;
-  ui?: { setStatus(key: string, text: string | undefined): void };
+  ui?: {
+    setStatus(key: string, text: string | undefined): void;
+    /** Extension widget rendered above or below the editor. */
+    setWidget?(
+      key: string,
+      content: string[] | undefined,
+      options?: { placement?: "aboveEditor" | "belowEditor" },
+    ): void;
+    /** Both hosts expose a theme; the `dim` color matches the footer/status line. */
+    theme?: { fg(color: string, text: string): string };
+  };
   sessionManager: {
     getSessionId(): string | undefined;
     getSessionFile?(): string | undefined;
@@ -106,6 +116,8 @@ export type HostAdapter = {
   idleOnAgentEnd: boolean;
   /** Supply the session identity to matching `agent-id current` calls. */
   injectIdentity(event: unknown, sessionId: string | undefined): InputReplacement | void;
+  /** Show (or clear, with `undefined`) the identity slug in the host UI. */
+  showIdentity(context: SessionContext, slug: string | undefined): void;
   /** Pick the model used for automatic summaries. */
   resolveSummaryModel(context: SessionContext): SummaryModel | undefined;
   /** Run a bounded completion; resolves to null when the host cannot complete. */
@@ -124,6 +136,14 @@ export const AGENT_ID_CURRENT_COMMAND =
   /(?:^|[;&|`$()\n]\s*)(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*)(?:\S*\/)?agent-id\s+(?:--[A-Za-z0-9_-]+(?:=(?:"[^"]*"|'[^']*'|\S+))?\s+|-[A-Za-z0-9]\s+)*current(?=\s|$|[;&|)`])/;
 
 const OMP_MODEL_ROLES = ["@tiny", "@smol"] as const;
+
+/** Stable UI key so a local extension publishing the same identity replaces it. */
+export const IDENTITY_UI_KEY = "agent-id";
+
+function dim(context: SessionContext, text: string): string {
+  const theme = context.ui?.theme;
+  return theme ? theme.fg("dim", text) : text;
+}
 
 function currentCall(event: unknown): ToolCallEvent | undefined {
   if (typeof event !== "object" || event === null) return;
@@ -211,6 +231,20 @@ export function createHostAdapter(context: SessionContext): HostAdapter {
         call.input.command = withIdentity(call.input.command as string, sessionId);
         return { input: call.input };
       },
+      showIdentity(ctx, slug) {
+        // OMP strips ANSI from hook statuses and renders them unstyled below the
+        // status bar. A `belowEditor` widget occupies that same row but keeps
+        // its styling, so publish there and leave the status slot empty.
+        const ui = ctx.ui;
+        if (!ui) return;
+        if (typeof ui.setWidget !== "function") {
+          ui.setStatus(IDENTITY_UI_KEY, slug);
+          return;
+        }
+        ui.setWidget(IDENTITY_UI_KEY, slug === undefined ? undefined : [dim(ctx, slug)], {
+          placement: "belowEditor",
+        });
+      },
       resolveSummaryModel(ctx) {
         for (const role of OMP_MODEL_ROLES) {
           const model = ctx.models?.resolve(role);
@@ -253,6 +287,10 @@ export function createHostAdapter(context: SessionContext): HostAdapter {
       return reason !== "reload";
     },
     idleOnAgentEnd: false,
+    showIdentity(ctx, slug) {
+      // Pi's footer renders statuses verbatim, so dim it to match footer text.
+      ctx.ui?.setStatus(IDENTITY_UI_KEY, slug === undefined ? undefined : dim(ctx, slug));
+    },
     injectIdentity(event, sessionId) {
       if (!sessionId) return;
       const call = currentCall(event);

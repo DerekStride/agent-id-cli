@@ -10,7 +10,7 @@ import {
   type SummaryModel,
 } from "./lib/host.ts";
 
-export { AGENT_ID_CURRENT_COMMAND, createHostAdapter, isOmpContext, withIdentity } from "./lib/host.ts";
+export { AGENT_ID_CURRENT_COMMAND, createHostAdapter, IDENTITY_UI_KEY, isOmpContext, withIdentity } from "./lib/host.ts";
 export type { ExtensionAPI, HostAdapter, SessionContext } from "./lib/host.ts";
 
 type MessageContent = string | Array<{ type: string; text?: string }>;
@@ -36,9 +36,6 @@ type AgentEndEvent = {
   willContinue?: boolean;
 };
 
-// Status-line key for the session slug. Shared with any local extension that
-// publishes the same identity so the two never render side by side.
-export const IDENTITY_STATUS_KEY = "agent-id";
 export const ACTIVITY_STATE_VALUES = [
   "working",
   "idle",
@@ -192,6 +189,7 @@ export function sessionFileExtension(
 }
 
 function updateActivityState(
+  host: HostAdapter,
   context: SessionContext,
   value: ActivityStateValue,
 ): void {
@@ -204,13 +202,11 @@ function updateActivityState(
       extensions: sessionFileExtension(context, value),
     });
     // The slug is what other agents address (`agent-mail send --to <slug>`), so
-    // surface it where a human can read it off the screen.
-    context.ui?.setStatus(
-      IDENTITY_STATUS_KEY,
-      value === "stopped" ? undefined : assignment.slug,
-    );
+    // surface it where a human can read it off the screen. Where and how it
+    // renders is a host concern.
+    host.showIdentity(context, value === "stopped" ? undefined : assignment.slug);
   } catch (error) {
-    context.ui?.setStatus(IDENTITY_STATUS_KEY, undefined);
+    host.showIdentity(context, undefined);
     const detail = error instanceof Error ? error.message : String(error);
     console.warn(`agent-id: unable to update the activity state: ${detail}`);
   }
@@ -387,7 +383,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
         beforeSessionChange: abortSummarySession,
         settled: (ctx) => {
           if (ctx.sessionManager.getSessionId() !== currentSessionId) return;
-          updateActivityState(ctx, "idle");
+          updateActivityState(adapter(ctx), ctx, "idle");
         },
       });
     }
@@ -433,9 +429,9 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   }
 
   function activateSession(context: SessionContext): void {
-    adapter(context);
+    const active = adapter(context);
     currentSessionId = context.sessionManager.getSessionId();
-    updateActivityState(context, "idle");
+    updateActivityState(active, context, "idle");
     restoreSummarySession(context);
   }
 
@@ -500,14 +496,14 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, context) => activateSession(context));
   pi.on("session_tree", (_event, context) => activateSession(context));
   pi.on("agent_start", (_event, context) => {
-    adapter(context);
+    const active = adapter(context);
     currentSessionId = context.sessionManager.getSessionId();
-    updateActivityState(context, "working");
+    updateActivityState(active, context, "working");
   });
   pi.on("session_shutdown", (event, context) => {
-    const ends = adapter(context).endsSession(event);
+    const active = adapter(context);
     currentSessionId = undefined;
-    if (ends) updateActivityState(context, "stopped");
+    if (active.endsSession(event)) updateActivityState(active, context, "stopped");
     for (const session of summarySessions.values()) session.abort.abort();
     summarySessions.clear();
   });
@@ -529,7 +525,7 @@ export default function agentIdExtension(pi: ExtensionAPI): void {
       ) {
         return;
       }
-      if (active.idleOnAgentEnd) updateActivityState(context, "idle");
+      if (active.idleOnAgentEnd) updateActivityState(active, context, "idle");
       await maintainAutoSummary(context, sessionId, session, end, controller, epoch);
     });
     await session.queue;

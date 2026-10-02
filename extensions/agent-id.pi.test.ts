@@ -217,6 +217,19 @@ describe("Pi lifecycle", () => {
     ]);
   });
 
+  test("dims the status slug with the host theme when available", async () => {
+    const h = harness();
+    const statuses: Array<[string, string | undefined]> = [];
+    const context = piContext("themed-session", [], {
+      ui: {
+        setStatus: (key, text) => { statuses.push([key, text]); },
+        theme: { fg: (color, text) => `<${color}>${text}</${color}>` },
+      },
+    });
+    await h.emit("session_start", { reason: "startup" }, context);
+    assert.deepEqual(statuses, [["agent-id", "<dim>test-agent-realm</dim>"]]);
+  });
+
   test("registers idle on start, working on agent start, idle on settle, stopped on quit", async () => {
     const h = harness();
     const context = piContext("pi-session");
