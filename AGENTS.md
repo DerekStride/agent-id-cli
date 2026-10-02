@@ -93,7 +93,7 @@ Prints the agent-facing workflow and command contract. `--prelude` omits the com
 
 The package bundles `skills/agent-id/SKILL.md` for on-demand identity and neighbor-selection guidance. The extension does not insert instructional context into session branches and does not register an identity tool.
 
-Both hosts expose `ctx.ui.setStatus(key, text)`. The `agent-id` status renders wherever OMP places extension statuses: below the status line by default (`statusLine.showHookStatus`), or inline through the `status` segment of a custom status line. Pi shows extension statuses in its footer. The status key is stable so a local extension publishing the same identity replaces it rather than duplicating it.
+Presentation of the slug is a host-adapter concern (`HostAdapter.showIdentity`). Pi publishes it through `ctx.ui.setStatus` dimmed to match its footer text. OMP strips ANSI from hook statuses and renders them unstyled, so the OMP adapter publishes a dimmed `belowEditor` widget through `ctx.ui.setWidget` instead; that occupies the same row below the status bar and leaves the status bar's own segments untouched. The UI key (`agent-id`) is stable so a local extension publishing the same identity replaces it rather than duplicating it.
 
 ### Host adapter
 
